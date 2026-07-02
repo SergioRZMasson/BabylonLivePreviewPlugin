@@ -1,0 +1,10 @@
+EXPORTS
+    blp_create
+    blp_destroy
+    blp_resize
+    blp_render_frame
+    blp_is_ready
+    blp_submit_commands
+    blp_eval
+    blp_request_readback
+    blp_try_acquire_readback

@@ -1,0 +1,26 @@
+Babylon Live Preview - Blender add-on (Windows x64, Blender 4.2 LTS)
+====================================================================
+
+INSTALL
+  1. Open Blender 4.2.
+  2. Edit > Preferences > Add-ons > Install...
+  3. Select  babylon_live_preview.zip
+  4. Tick the checkbox to enable "Babylon Live Preview" (search: Babylon).
+
+USE
+  1. In the 3D viewport press N to open the sidebar, choose the "Babylon" tab.
+  2. Click "Toggle Live Preview".
+       - The viewport shows the scene rendered live by Babylon.js.
+       - Move/rotate objects or change a material's Base Color / Metallic /
+         Roughness and the preview updates live.
+       - Press Esc (mouse over the viewport) to stop.
+
+NOTES
+  - Self-contained: the core DLL, the V8 / Babylon Native runtime and the JS
+    bundle are all bundled under  bin/ . The add-on auto-detects
+    bin\babylon_live_preview.dll  (no configuration needed). You can override the
+    path in the add-on Preferences if you want.
+  - The preview renders from the active SCENE camera's viewpoint.
+  - Requires a Direct3D 11 capable Windows GPU.
+  - If the preview looks vertically flipped on your GPU/driver, tell us - the
+    draw handler's V-flip may need adjusting for your setup.

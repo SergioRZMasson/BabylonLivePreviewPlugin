@@ -1,0 +1,11 @@
+{
+  "name": "babylon-live-preview-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Babylon.js live-preview plugins for 3ds Max, Maya and Blender (Babylon Native).",
+  "dependencies": {
+    "babylonjs": "9.15.0",
+    "babylonjs-loaders": "9.15.0",
+    "babylonjs-materials": "9.15.0"
+  }
+}

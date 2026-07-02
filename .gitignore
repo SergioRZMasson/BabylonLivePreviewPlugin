@@ -1,0 +1,22 @@
+# Build output
+/build/
+/out/
+/.vs/
+
+# Node
+/node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated artifacts
+*.bmp
+*.png
+!Documentation/**/*.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.user
