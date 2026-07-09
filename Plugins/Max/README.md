@@ -54,10 +54,10 @@ bundle and the Babylon Native / V8 runtime DLLs staged alongside.
 
 | Shared (all DCCs) | Max-specific (this folder) |
 |---|---|
-| Protocol (`SceneProtocol.h`) | DAG walk / geometry / material / light extraction (`MaxCapture.cpp`) |
+| Protocol (`SceneProtocol.h`) + the TypeScript decoder | DAG walk / geometry / material / light extraction (`MaxCapture.cpp`) |
 | `SceneTranslator` diff + encode | Plugin entry points + MAXScript interface (`plugin.cpp`) |
-| Babylon Native host (`LivePreviewSession`) | VFB display + timer pump |
-| `live_preview.js` decoder | Coordinate basis choice (Z-up RH) |
+| `BabylonLivePreviewCore` (Babylon Native host) | VFB display + timer pump |
+| `live_preview.js` (generated from `Clients/ts`) | Coordinate basis choice (Z-up RH) |
 
 ## Known follow-ups
 
