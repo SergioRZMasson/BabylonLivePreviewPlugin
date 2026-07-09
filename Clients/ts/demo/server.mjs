@@ -30,7 +30,8 @@ const STATIC = {
 };
 
 const server = http.createServer(async (req, res) => {
-    const entry = STATIC[req.url ?? "/"];
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    const entry = STATIC[pathname];
     if (!entry) {
         res.writeHead(404);
         res.end("Not found");

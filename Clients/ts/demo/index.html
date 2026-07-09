@@ -34,7 +34,7 @@
         const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true });
         const scene = new BABYLON.Scene(engine);
 
-        const url = "ws://" + location.host;
+        const url = new URLSearchParams(location.search).get("ws") || ("ws://" + location.host);
         const sync = new LiveSync(scene, { source: url });
         sync.start()
             .then(() => { status.textContent = "live from " + url; })
