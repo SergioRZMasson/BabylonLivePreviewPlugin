@@ -78,6 +78,25 @@ scene-delta buffers over WebSocket; the initial geometry is loaded once from a
 baked glTF and deltas are addressed to those nodes. See
 `Plugins/Omniverse/Plan.md`.
 
+## Demo (WebSocket, end to end)
+
+A mock producer that streams scene-delta buffers to a Babylon.js page — no
+page-specific scene code, everything (camera, lights, meshes, animation) arrives
+over the socket.
+
+```powershell
+npm install                      # once, at the repo root
+node Clients/ts/build.mjs --web  # build the UMD/ESM bundles
+node Clients/ts/demo/server.mjs  # http + ws on http://localhost:8080
+# open http://localhost:8080 in a browser
+
+# headless end-to-end check (NullEngine client + ws server, no browser):
+node Clients/ts/demo/client-check.mjs
+```
+
+`demo/deltas.mjs` builds the buffers with the TS `CommandWriter` — the same
+encoder a real producer (USD/Omniverse bridge) uses.
+
 ## Protocol
 
 Binary, little-endian, mirrors `Shared/include/BabylonLivePreview/

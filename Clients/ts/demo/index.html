@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Babylon Live Sync — WebSocket demo</title>
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0e14; }
+        #view { width: 100vw; height: 100vh; display: block; touch-action: none; }
+        #hud {
+            position: fixed; top: 10px; left: 12px; font: 13px/1.4 system-ui, sans-serif;
+            color: #cdd6f4; background: rgba(0,0,0,0.45); padding: 8px 10px; border-radius: 6px;
+        }
+        #hud b { color: #89b4fa; }
+    </style>
+</head>
+<body>
+    <canvas id="view"></canvas>
+    <div id="hud"><b>Babylon Live Sync</b> — <span id="status">connecting…</span></div>
+
+    <!-- Babylon engine (provides the global BABYLON) -->
+    <script src="/babylon.js"></script>
+    <!-- The Live Sync UMD bundle (provides window.BabylonLiveSync) -->
+    <script src="/babylon-live-sync.umd.js"></script>
+    <script>
+        const LiveSync = window.BabylonLiveSync.BabylonLiveSync;
+
+        const canvas = document.getElementById("view");
+        const status = document.getElementById("status");
+
+        // The host owns the engine, scene and render loop. Live Sync only applies
+        // scene-delta buffers to this scene — the camera, lights, meshes and their
+        // animation all arrive over the WebSocket.
+        const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true });
+        const scene = new BABYLON.Scene(engine);
+
+        const url = "ws://" + location.host;
+        const sync = new LiveSync(scene, { source: url });
+        sync.start()
+            .then(() => { status.textContent = "live from " + url; })
+            .catch((e) => { status.textContent = "error: " + e; });
+
+        engine.runRenderLoop(() => {
+            if (scene.activeCamera) {
+                scene.render();
+            }
+        });
+        window.addEventListener("resize", () => engine.resize());
+    </script>
+</body>
+</html>

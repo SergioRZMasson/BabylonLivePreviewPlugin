@@ -17,4 +17,7 @@ export {
     LightType,
     CameraMode,
     TextureChannel,
+    Reader,
+    CommandWriter,
 } from "../protocol";
+export type { Vec3, Quat } from "../protocol";
