@@ -60,4 +60,5 @@ endif()
 # Ship the JS bundle + Babylon Native runtime DLLs next to the .mll so the
 # plugin's scriptsRoot ("<mll dir>/Scripts") resolves.
 blp_stage_scripts_for(BabylonLivePreviewMaya)
+blp_build_live_script(BabylonLivePreviewMaya maya)
 blp_copy_runtime_dlls(BabylonLivePreviewMaya)

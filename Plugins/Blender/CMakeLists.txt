@@ -27,4 +27,5 @@ endif()
 # Ship the JS bundle + Babylon Native runtime DLLs next to the module so the
 # add-on can point scriptsRoot at "<dll dir>/Scripts".
 blp_stage_scripts_for(BabylonLivePreviewBlender)
+blp_build_live_script(BabylonLivePreviewBlender blender)
 blp_copy_runtime_dlls(BabylonLivePreviewBlender)

@@ -7,5 +7,9 @@
     "babylonjs": "9.15.0",
     "babylonjs-loaders": "9.15.0",
     "babylonjs-materials": "9.15.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
   }
 }

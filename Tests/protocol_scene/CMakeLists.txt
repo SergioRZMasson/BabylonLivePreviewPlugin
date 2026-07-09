@@ -9,4 +9,5 @@ endif()
 set_property(TARGET blp_protocol_scene PROPERTY FOLDER "BabylonLivePreview")
 
 blp_stage_scripts_for(blp_protocol_scene)
+blp_build_live_script(blp_protocol_scene test)
 blp_copy_runtime_dlls(blp_protocol_scene)

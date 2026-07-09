@@ -10,4 +10,5 @@ set_property(TARGET blp_headless_render PROPERTY FOLDER "BabylonLivePreview")
 
 # Stage the JS bundle into "<exe dir>/Scripts" and copy Babylon Native / V8 DLLs.
 blp_stage_scripts_for(blp_headless_render)
+blp_build_live_script(blp_headless_render test)
 blp_copy_runtime_dlls(blp_headless_render)

@@ -3,6 +3,8 @@
 /dist/
 /out/
 /.vs/
+# Generated TypeScript bundles (built from Clients/ts/src)
+/Clients/ts/dist/
 
 # Node
 /node_modules/

@@ -1,0 +1,22 @@
+{
+  "name": "@babylonjs/live-sync",
+  "version": "0.1.0",
+  "description": "Live-update a Babylon.js scene from scene-delta buffers over a native call or a WebSocket. Shared by the DCC live-preview plugins (Blender/Maya/3ds Max) and browser/Omniverse clients.",
+  "type": "module",
+  "main": "dist/babylon-live-sync.umd.js",
+  "module": "dist/babylon-live-sync.esm.js",
+  "types": "dist/types/entries/web.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "node build.mjs --web",
+    "build:native": "node build.mjs --entry native",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "babylonjs": ">=9.0.0"
+  },
+  "license": "Apache-2.0"
+}

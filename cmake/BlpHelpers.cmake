@@ -27,11 +27,12 @@ function(blp_setup_scripts)
     file(MAKE_DIRECTORY "${BLP_SCRIPTS_STAGE}")
 
     # "source|destination-name" pairs. Missing optional sources are skipped.
+    # NOTE: live_preview.js is NOT staged here — it is generated per-DCC from the
+    # TypeScript project (Clients/ts) by blp_build_live_script().
     set(_pairs
         "${_babylon}|babylon.js"
         "${BLP_NODE_MODULES}/babylonjs-loaders/babylonjs.loaders.min.js|babylonjs.loaders.js"
         "${BLP_NODE_MODULES}/babylonjs-materials/babylonjs.materials.min.js|babylonjs.materials.js"
-        "${CMAKE_SOURCE_DIR}/Shared/Scripts/live_preview.js|live_preview.js"
         "${CMAKE_SOURCE_DIR}/Shared/Assets/environment.env|environment.env")
 
     set(_outputs "")
@@ -70,4 +71,28 @@ function(blp_copy_runtime_dlls target)
                 $<TARGET_RUNTIME_DLLS:${target}> $<TARGET_FILE_DIR:${target}>
             COMMAND_EXPAND_LISTS)
     endif()
+endfunction()
+
+# Node is required to build the per-DCC live_preview.js from the TypeScript
+# project (Clients/ts). Run `npm install` at the repo root once beforehand.
+find_program(BLP_NODE_EXECUTABLE NAMES node node.exe)
+
+# Builds "<target output>/Scripts/live_preview.js" from Clients/ts for the given
+# DCC (embedded as the BLP_DCC define). Call AFTER blp_stage_scripts_for(target)
+# so the generated bundle lands after the shared Babylon scripts are copied. This
+# is how each plugin "creates its own" JS bundle from the shared TS source.
+function(blp_build_live_script target dcc)
+    if(NOT BLP_NODE_EXECUTABLE)
+        message(WARNING
+            "BLP: node not found — ${target} will ship without live_preview.js. "
+            "Install Node.js and run 'npm install' at the repo root.")
+        return()
+    endif()
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/Scripts"
+        COMMAND "${BLP_NODE_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/Clients/ts/build.mjs"
+            --entry native --dcc ${dcc}
+            --out "$<TARGET_FILE_DIR:${target}>/Scripts/live_preview.js"
+        COMMENT "Building ${dcc} live_preview.js from Clients/ts (TypeScript)"
+        VERBATIM)
 endfunction()

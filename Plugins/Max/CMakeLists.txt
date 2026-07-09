@@ -63,4 +63,5 @@ target_compile_definitions(BabylonLivePreviewMax PRIVATE
 # Ship the JS bundle + Babylon Native runtime DLLs next to the .dlu so the
 # plugin's scriptsRoot ("<dlu dir>/Scripts") resolves.
 blp_stage_scripts_for(BabylonLivePreviewMax)
+blp_build_live_script(BabylonLivePreviewMax max)
 blp_copy_runtime_dlls(BabylonLivePreviewMax)
