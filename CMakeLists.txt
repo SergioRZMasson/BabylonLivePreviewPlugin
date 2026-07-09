@@ -52,6 +52,7 @@ endif()
 if(BLP_BUILD_TESTS)
     add_subdirectory(Tests/headless_render)
     add_subdirectory(Tests/protocol_scene)
+    add_subdirectory(Tests/translator)
 endif()
 
 if(MSVC)

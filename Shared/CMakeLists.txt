@@ -10,9 +10,11 @@
 add_library(BabylonLivePreviewCore STATIC
     src/LivePreview.cpp
     src/SceneProtocol.cpp
+    src/SceneTranslation.cpp
     src/c_api.cpp
     include/BabylonLivePreview/LivePreview.h
     include/BabylonLivePreview/SceneProtocol.h
+    include/BabylonLivePreview/SceneTranslation.h
     include/BabylonLivePreview/c_api.h)
 
 target_include_directories(BabylonLivePreviewCore PUBLIC include)
