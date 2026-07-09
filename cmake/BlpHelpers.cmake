@@ -31,7 +31,8 @@ function(blp_setup_scripts)
         "${_babylon}|babylon.js"
         "${BLP_NODE_MODULES}/babylonjs-loaders/babylonjs.loaders.min.js|babylonjs.loaders.js"
         "${BLP_NODE_MODULES}/babylonjs-materials/babylonjs.materials.min.js|babylonjs.materials.js"
-        "${CMAKE_SOURCE_DIR}/Shared/Scripts/live_preview.js|live_preview.js")
+        "${CMAKE_SOURCE_DIR}/Shared/Scripts/live_preview.js|live_preview.js"
+        "${CMAKE_SOURCE_DIR}/Shared/Assets/environment.env|environment.env")
 
     set(_outputs "")
     foreach(_pair ${_pairs})

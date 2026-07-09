@@ -33,6 +33,62 @@ function _findNode(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Environment (IBL). The core hands us the default .env bytes via
+// _blpSetEnvironment; we keep them and re-apply to every scene so PBR materials
+// get image-based lighting + reflections (a standard Babylon look).
+// ---------------------------------------------------------------------------
+var _envBuffer = null;
+
+// The NativeEngine back buffer is LINEAR. PBR materials apply Babylon image
+// processing (tone mapping + linear->sRGB) in-shader by default, so meshes are
+// display-correct; the core additionally gamma-encodes the readback so the
+// background/clear color matches too (see RenderTarget readback in C++).
+function _ensureImageProcessing(scene) {
+    if (!scene) return;
+    var ip = scene.imageProcessingConfiguration;
+    ip.isEnabled = true;
+    // Materials output LINEAR (skip in-shader gamma); the core gamma-encodes the
+    // whole readback uniformly so background and meshes match. Keeping this off
+    // the in-shader path avoids inconsistent linear-vs-sRGB regions.
+    ip.applyByPostProcess = true;
+    ip.toneMappingEnabled = true;
+    ip.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+    ip.contrast = 1.0;
+    ip.exposure = 1.0;
+}
+
+function _applyEnvironment(scene) {
+    if (!scene || !_envBuffer) return;
+    try {
+        var env = new BABYLON.CubeTexture("data:environment.env", scene, {
+            buffer: _envBuffer,
+            forcedExtension: ".env",
+        });
+        scene.environmentTexture = env;
+        scene.environmentIntensity = 1.0;
+    } catch (e) {
+        console.error("[live_preview] environment apply failed: " + e);
+    }
+    _ensureImageProcessing(scene);
+}
+
+// Pull the default environment bytes from the core (the native getter is
+// registered before this script runs) and apply them to the current scene.
+function _blpLoadEnvironment() {
+    if (typeof _blpGetEnvironmentBytes !== "function") return;
+    try {
+        var ab = _blpGetEnvironmentBytes();
+        if (ab && ab.byteLength > 0) {
+            _envBuffer = new Uint8Array(ab);
+            console.log("[live_preview] environment loaded (" + ab.byteLength + " bytes)");
+            if (currentScene) _applyEnvironment(currentScene);
+        }
+    } catch (e) {
+        console.error("[live_preview] environment pull failed: " + e);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Default scene — gives M1 something to render/read back immediately.
 // ---------------------------------------------------------------------------
 function createDefaultScene() {
@@ -72,10 +128,12 @@ function setCurrentScene(scene) {
     }
     _nodeById = {};
     currentScene = scene;
+    _applyEnvironment(scene);
 }
 
 setCurrentScene(createDefaultScene());
 console.log("[live_preview] default scene created");
+_blpLoadEnvironment();
 
 // ---------------------------------------------------------------------------
 // Host -> Babylon command decoder (M2 fills in the record handlers).
@@ -109,6 +167,7 @@ function _applyCommand(type, view, off) {
         case 5: return _cmdUpsertMaterial(view, off);
         case 6: return _cmdUpsertLight(view, off);
         case 7: return _cmdSetCamera(view, off);
+        case 8: return _cmdUpsertMaterialTexture(view, off);
         case 10: return _cmdResetScene(view, off);
         case 11: return _cmdSetClearColor(view, off);
         default:
@@ -139,6 +198,18 @@ function _cmdSetTransform(view, off) {
     return off;
 }
 
+// Ensure a node carries a PBRMetallicRoughnessMaterial and return it.
+function _ensurePbr(node, id) {
+    var m = node.material;
+    if (!m || m.getClassName() !== "PBRMetallicRoughnessMaterial") {
+        if (m) { try { m.dispose(); } catch (e) {} }
+        m = new BABYLON.PBRMetallicRoughnessMaterial("mat" + id, currentScene);
+        m.backFaceCulling = false;
+        node.material = m;
+    }
+    return m;
+}
+
 function _cmdUpsertMaterial(view, off) {
     var id = _readU64(view, off); off += 8;
     var r = view.getFloat32(off, true); off += 4;
@@ -147,20 +218,94 @@ function _cmdUpsertMaterial(view, off) {
     var a = view.getFloat32(off, true); off += 4;
     var metallic = view.getFloat32(off, true); off += 4;
     var roughness = view.getFloat32(off, true); off += 4;
+    var er = view.getFloat32(off, true); off += 4;
+    var eg = view.getFloat32(off, true); off += 4;
+    var eb = view.getFloat32(off, true); off += 4;
+    var estr = view.getFloat32(off, true); off += 4;
     var node = _findNode(id);
     if (node) {
-        // Always use Babylon's PBR metallic/roughness material.
-        var m = node.material;
-        if (!m || m.getClassName() !== "PBRMetallicRoughnessMaterial") {
-            if (m) { try { m.dispose(); } catch (e) {} }
-            m = new BABYLON.PBRMetallicRoughnessMaterial("mat" + id, currentScene);
-            node.material = m;
-        }
+        var m = _ensurePbr(node, id);
         m.baseColor.set(r, g, b);
         m.metallic = metallic;
         m.roughness = roughness;
         m.alpha = a;
-        m.backFaceCulling = false;
+        // Effective emission = colour * strength (Blender's model). Premultiplying
+        // keeps "no emission" truly black — Babylon's unlit path adds emissiveColor
+        // regardless of emissiveIntensity, and Blender defaults emission colour to
+        // white at strength 0, which would otherwise wash the surface out.
+        if (m.emissiveColor) { m.emissiveColor.set(er * estr, eg * estr, eb * estr); }
+        m.emissiveIntensity = 1.0;
+    }
+    return off;
+}
+
+// ---------------------------------------------------------------------------
+// PBR channel textures. The host sends encoded image bytes (PNG/JPG/...) which
+// NativeEngine decodes via bimg. gammaSpace is set per channel: base colour and
+// emissive are sRGB, the data channels (normal / metallic-roughness / occlusion)
+// are linear.
+// ---------------------------------------------------------------------------
+var _texCounter = 0;
+
+function _texSlot(channel) {
+    switch (channel) {
+        case 0: return "baseTexture";
+        case 1: return "metallicRoughnessTexture";
+        case 2: return "normalTexture";
+        case 3: return "emissiveTexture";
+        case 4: return "occlusionTexture";
+    }
+    return null;
+}
+
+function _makeTexture(bytes, gammaSpace) {
+    // Babylon Native decodes an encoded-image buffer only when the url begins
+    // with "data:" and the buffer is passed positionally (see reference
+    // experience.js). invertY is unsupported for Native textures, so the V flip
+    // is baked into the UVs on the host side.
+    var tex = new BABYLON.Texture(
+        "data:blptex" + (_texCounter++),
+        currentScene,
+        false,  // noMipmap -> generate mips
+        false,  // invertY (unsupported in Native; handled via UVs)
+        BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
+        null,   // onLoad
+        function (msg) { console.error("[live_preview] texture load failed: " + msg); },
+        bytes,  // buffer: encoded image bytes, decoded via bimg
+        true    // deleteBuffer
+    );
+    tex.gammaSpace = gammaSpace;
+    return tex;
+}
+
+function _setChannel(mat, channel, tex) {
+    var slot = _texSlot(channel);
+    if (!slot) { if (tex) { try { tex.dispose(); } catch (e) {} } return; }
+    var old = mat[slot];
+    if (old && old !== tex) { try { old.dispose(); } catch (e) {} }
+    mat[slot] = tex;
+}
+
+function _cmdUpsertMaterialTexture(view, off) {
+    var id = _readU64(view, off); off += 8;
+    var channel = view.getUint16(off, true); off += 2;
+    /* encoding */ view.getUint8(off); off += 1;
+    var len = view.getUint32(off, true); off += 4;
+    var bytes = null;
+    if (len > 0) {
+        bytes = new Uint8Array(len);
+        bytes.set(new Uint8Array(view.buffer, view.byteOffset + off, len));
+    }
+    off += len;
+    var node = _findNode(id);
+    if (node) {
+        var mat = _ensurePbr(node, id);
+        if (!bytes) {
+            _setChannel(mat, channel, null); // clear
+        } else {
+            var gamma = (channel === 0 || channel === 3);
+            _setChannel(mat, channel, _makeTexture(bytes, gamma));
+        }
     }
     return off;
 }
@@ -196,6 +341,8 @@ function _cmdSetCamera(view, off) {
             } catch (e) { /* ignore during bring-up */ }
         }
     }
+    // A camera may have just been created; ensure it has the IP post-process.
+    _ensureImageProcessing(currentScene);
     return off;
 }
 

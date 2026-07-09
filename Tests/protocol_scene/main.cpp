@@ -135,14 +135,14 @@ int main()
         -2.0f, 0.5f, 0.0f, 0, 0, 0, 1, 1, 1, 1);
     enc.UpsertMeshGeometry(1, box.positions.data(), static_cast<uint32_t>(box.positions.size() / 3),
         box.normals.data(), nullptr, box.indices.data(), static_cast<uint32_t>(box.indices.size()));
-    enc.UpsertMaterial(1, 0.90f, 0.08f, 0.08f, 1.0f, 0.0f, 0.6f);
+    enc.UpsertMaterial(1, 0.90f, 0.08f, 0.08f, 1.0f, 0.0f, 0.6f, 0.0f, 0.0f, 0.0f, 0.0f);
 
     // Green box on the right.
     enc.UpsertNode(2, 0, NodeKind::Mesh, "rightBox",
         2.0f, 0.5f, 0.0f, 0, 0, 0, 1, 1, 1, 1);
     enc.UpsertMeshGeometry(2, box.positions.data(), static_cast<uint32_t>(box.positions.size() / 3),
         box.normals.data(), nullptr, box.indices.data(), static_cast<uint32_t>(box.indices.size()));
-    enc.UpsertMaterial(2, 0.08f, 0.80f, 0.10f, 1.0f, 0.0f, 0.6f);
+    enc.UpsertMaterial(2, 0.08f, 0.80f, 0.10f, 1.0f, 0.0f, 0.6f, 0.0f, 0.0f, 0.0f, 0.0f);
 
     const std::vector<uint8_t> commands = enc.Finish();
     std::printf("[m2] submitting %zu-byte command buffer\n", commands.size());

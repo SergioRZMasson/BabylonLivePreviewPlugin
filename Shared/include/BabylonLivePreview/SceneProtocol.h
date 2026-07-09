@@ -27,11 +27,28 @@ namespace BabylonLivePreview
         RemoveNode = 2,         // id
         SetTransform = 3,       // id, pos[3], quat[4], scale[3]
         UpsertMeshGeometry = 4, // id, vtxCount, hasNormals, hasUV, idxCount, arrays
-        UpsertMaterial = 5,     // nodeId, rgba[4], metallic, roughness
+        UpsertMaterial = 5,     // nodeId, rgba[4], metallic, roughness, emissive[3], emissiveStrength
         UpsertLight = 6,        // id, type, dir[3], color[3], intensity
         SetCamera = 7,          // mode + params (arcRotate) or view/proj matrices
+        UpsertMaterialTexture = 8, // nodeId, channel, encoding, byteLength, bytes (byteLength 0 = clear)
         ResetScene = 10,        // (none) — dispose current scene, start empty
         SetClearColor = 11,     // rgba[4]
+    };
+
+    // Texture channel of a PBRMetallicRoughnessMaterial (matches live_preview.js).
+    enum class MaterialTextureChannel : uint16_t
+    {
+        BaseColor = 0,         // sRGB (gamma) — albedo
+        MetallicRoughness = 1, // linear — glTF layout (G=roughness, B=metallic)
+        Normal = 2,            // linear — tangent-space normal map
+        Emissive = 3,          // sRGB (gamma)
+        Occlusion = 4,         // linear — ambient occlusion (R)
+    };
+
+    // How a texture payload is encoded (matches live_preview.js).
+    enum class TextureEncoding : uint8_t
+    {
+        EncodedImage = 0, // PNG/JPG/etc. file bytes, decoded natively via bimg
     };
 
     enum class NodeKind : uint16_t
@@ -83,7 +100,14 @@ namespace BabylonLivePreview
 
         void UpsertMaterial(uint64_t nodeId,
             float r, float g, float b, float a,
-            float metallic, float roughness);
+            float metallic, float roughness,
+            float emissiveR, float emissiveG, float emissiveB,
+            float emissiveStrength);
+
+        // Encoded image bytes for one PBR channel. Pass len==0 to clear the
+        // channel. `data` holds `len` bytes of an encoded image (PNG/JPG/etc).
+        void UpsertMaterialTexture(uint64_t nodeId, MaterialTextureChannel channel,
+            TextureEncoding encoding, const uint8_t* data, uint32_t len);
 
         void UpsertLight(uint64_t id, LightType type,
             float dx, float dy, float dz,

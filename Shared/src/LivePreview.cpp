@@ -13,6 +13,7 @@
 #include <Babylon/Polyfills/Console.h>
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
+#include <Babylon/Polyfills/URL.h>
 #include <Babylon/Polyfills/Canvas.h>
 
 #include <cstdio>
@@ -99,6 +100,24 @@ namespace BabylonLivePreview
                 impl->sceneReady.store(true);
             }
         }
+
+        // Default environment (.env / IBL) bytes, loaded from disk in the ctor.
+        // JS pulls these via _blpGetEnvironmentBytes (registered before scripts
+        // run), avoiding ordering issues with the ScriptLoader eval queue.
+        std::vector<uint8_t> envBytes{};
+
+        static Napi::Value GetEnvironmentBytes(const Napi::CallbackInfo& info)
+        {
+            auto env = info.Env();
+            auto* impl = static_cast<Impl*>(info.Data());
+            if (impl == nullptr || impl->envBytes.empty())
+            {
+                return env.Null();
+            }
+            auto ab = Napi::ArrayBuffer::New(env, impl->envBytes.size());
+            std::memcpy(ab.Data(), impl->envBytes.data(), impl->envBytes.size());
+            return ab;
+        }
     };
 
     LivePreviewSession::LivePreviewSession(const SessionConfig& config)
@@ -151,6 +170,29 @@ namespace BabylonLivePreview
         m_impl->runtime = std::make_unique<Babylon::AppRuntime>(std::move(runtimeOptions));
         chk("app runtime created");
 
+        // Load the default environment (IBL) asset now, before scripts run, so
+        // the native getter registered below can hand it to JS on demand.
+        {
+            const std::string envPath = config.scriptsRoot + "/environment.env";
+            std::ifstream envFile(envPath, std::ios::binary);
+            if (envFile)
+            {
+                m_impl->envBytes.assign(
+                    (std::istreambuf_iterator<char>(envFile)),
+                    std::istreambuf_iterator<char>());
+                if (verbose)
+                {
+                    std::fprintf(stderr, "[BLP-INIT] environment.env loaded (%zu bytes)\n",
+                        m_impl->envBytes.size());
+                    std::fflush(stderr);
+                }
+            }
+            else if (verbose)
+            {
+                std::fprintf(stderr, "[BLP-INIT] no environment.env at %s\n", envPath.c_str());
+            }
+        }
+
         Impl* impl = m_impl.get();
         const bool enableLogging = config.enableLogging;
 
@@ -167,6 +209,7 @@ namespace BabylonLivePreview
 
             Babylon::Polyfills::Window::Initialize(env);
             Babylon::Polyfills::XMLHttpRequest::Initialize(env);
+            Babylon::Polyfills::URL::Initialize(env);
 
             impl->canvas = std::make_unique<Babylon::Polyfills::Canvas>(
                 Babylon::Polyfills::Canvas::Initialize(env));
@@ -178,6 +221,10 @@ namespace BabylonLivePreview
             // JS calls this once after the first frame renders (readiness signal).
             env.Global().Set("_blpNotifyReady",
                 Napi::Function::New(env, &Impl::NotifyReady, "_blpNotifyReady", impl));
+
+            // JS pulls the default environment (.env) bytes via this getter.
+            env.Global().Set("_blpGetEnvironmentBytes",
+                Napi::Function::New(env, &Impl::GetEnvironmentBytes, "_blpGetEnvironmentBytes", impl));
         });
         chk("init dispatched");
 

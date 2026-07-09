@@ -29,6 +29,7 @@ CMD_UPSERT_MESH_GEOMETRY = 4
 CMD_UPSERT_MATERIAL = 5
 CMD_UPSERT_LIGHT = 6
 CMD_SET_CAMERA = 7
+CMD_UPSERT_MATERIAL_TEXTURE = 8
 CMD_RESET_SCENE = 10
 CMD_SET_CLEAR_COLOR = 11
 
@@ -44,6 +45,16 @@ LIGHT_POINT = 2
 # CameraMode
 CAM_ARCROTATE = 0
 CAM_MATRICES = 1
+
+# PBR texture channels (must match SceneProtocol.h / live_preview.js).
+TEX_BASECOLOR = 0        # sRGB — albedo
+TEX_METALROUGH = 1       # linear — glTF layout (G=roughness, B=metallic)
+TEX_NORMAL = 2           # linear — tangent-space normal map
+TEX_EMISSIVE = 3         # sRGB
+TEX_OCCLUSION = 4        # linear — ambient occlusion (R)
+
+# Texture payload encodings.
+TEXENC_IMAGE = 0         # PNG/JPG/etc. file bytes, decoded natively via bimg
 
 # Fixed ids for synthetic nodes.
 _FILL_LIGHT_ID = 1000000
@@ -111,11 +122,25 @@ class CommandEncoder:
         self._body += struct.pack("<%dI" % len(indices), *indices)
         self._count += 1
 
-    def upsert_material(self, node_id, rgba, metallic, roughness):
+    def upsert_material(self, node_id, rgba, metallic, roughness,
+                        emissive=(0.0, 0.0, 0.0), emissive_strength=0.0):
         self._u16(CMD_UPSERT_MATERIAL)
         self._body += struct.pack("<Q", int(node_id))
         self._body += struct.pack("<4f", *rgba)
         self._body += struct.pack("<2f", float(metallic), float(roughness))
+        self._body += struct.pack("<3f", *emissive)
+        self._body += struct.pack("<f", float(emissive_strength))
+        self._count += 1
+
+    def upsert_material_texture(self, node_id, channel, data, encoding=TEXENC_IMAGE):
+        """Send encoded image bytes for one PBR channel. data None/empty clears it."""
+        payload = data or b""
+        self._u16(CMD_UPSERT_MATERIAL_TEXTURE)
+        self._body += struct.pack("<Q", int(node_id))
+        self._body += struct.pack("<H", int(channel))
+        self._body += struct.pack("<B", int(encoding))
+        self._body += struct.pack("<I", len(payload))
+        self._body += payload
         self._count += 1
 
     def upsert_light(self, node_id, light_type, direction, color, intensity):
@@ -196,59 +221,254 @@ def _world_clear(scene):
 
 
 def _emit_geometry(enc, obj, node_id, depsgraph):
-    """Send LOCAL (object-space) geometry; Babylon computes normals."""
+    """Send LOCAL (object-space) geometry with real per-loop normals and UVs.
+
+    Per-loop vertices preserve Blender's smooth/flat/custom split normals and the
+    active UV layer. Both positions and normals are mapped into Babylon space;
+    winding is reversed once to compensate for the coordinate-system handedness
+    difference. UVs are emitted with V flipped (Blender's bottom-left origin vs
+    Babylon's top-left) so textures map the right way up.
+    """
     eval_obj = obj.evaluated_get(depsgraph) if depsgraph is not None else obj
     mesh = eval_obj.to_mesh()
     try:
         mesh.calc_loop_triangles()
-        positions, indices = [], []
-        vmap = {}
+
+        # Per-loop normals (Blender 4.1+ exposes mesh.corner_normals). Fall back
+        # to vertex normals if unavailable.
+        corner_normals = None
+        try:
+            corner_normals = mesh.corner_normals  # sequence indexed by loop index
+        except Exception:
+            corner_normals = None
+
+        # Active UV layer (per-loop). None when the mesh is unwrapped-less.
+        uv_data = None
+        try:
+            uv_layer = mesh.uv_layers.active
+            if uv_layer is not None:
+                uv_data = uv_layer.data
+        except Exception:
+            uv_data = None
+
+        positions, normals, uvs, indices = [], [], [], []
         for tri in mesh.loop_triangles:
-            for vidx in tri.vertices:
-                if vidx not in vmap:
-                    co = mesh.vertices[vidx].co  # object space
-                    p = _to_babylon(co.x, co.y, co.z)
-                    vmap[vidx] = len(positions) // 3
-                    positions += [p[0], p[1], p[2]]
-                indices.append(vmap[vidx])
-        # Reverse winding once to compensate for the basis change.
+            for vidx, lidx in zip(tri.vertices, tri.loops):
+                co = mesh.vertices[vidx].co  # object space
+                p = _to_babylon(co.x, co.y, co.z)
+                if corner_normals is not None:
+                    nv = corner_normals[lidx].vector
+                else:
+                    nv = mesh.vertices[vidx].normal
+                n = _to_babylon(nv.x, nv.y, nv.z)
+                indices.append(len(positions) // 3)
+                positions += [p[0], p[1], p[2]]
+                normals += [n[0], n[1], n[2]]
+                if uv_data is not None:
+                    uv = uv_data[lidx].uv
+                    uvs += [uv[0], 1.0 - uv[1]]
+
+        # Reverse winding once to compensate for the basis-change handedness.
         for t in range(0, len(indices) - 2, 3):
             indices[t + 1], indices[t + 2] = indices[t + 2], indices[t + 1]
-        enc.upsert_mesh_geometry(node_id, positions, None, None, indices)
+
+        enc.upsert_mesh_geometry(node_id, positions, normals,
+                                 uvs if uv_data is not None else None, indices)
     finally:
         eval_obj.to_mesh_clear()
 
 
-def _material_tuple(obj):
+_TEX_CHANNELS = (TEX_BASECOLOR, TEX_METALROUGH, TEX_NORMAL, TEX_EMISSIVE, TEX_OCCLUSION)
+
+# Raster formats bimg can decode directly (read original file bytes as-is).
+_RASTER_EXTS = ('.png', '.jpg', '.jpeg', '.tga', '.bmp', '.dds', '.ktx', '.hdr')
+
+
+def _find_principled(mat):
+    if mat is None or not getattr(mat, "use_nodes", False) or mat.node_tree is None:
+        return None
+    for n in mat.node_tree.nodes:
+        if n.type == 'BSDF_PRINCIPLED':
+            return n
+    return None
+
+
+def _trace_image(socket, depth=0):
+    """Follow a node socket's links back to the source Image Texture datablock."""
+    if socket is None or not getattr(socket, "is_linked", False) or depth > 6:
+        return None
+    node = socket.links[0].from_node
+    if node.type == 'TEX_IMAGE':
+        return node.image
+    # Passthrough / helper nodes (Normal Map, Separate Color, Mix, ...): follow
+    # the most likely colour-carrying input first, then any linked input.
+    for name in ('Color', 'Image', 'Vector', 'Fac'):
+        inp = node.inputs.get(name) if hasattr(node.inputs, "get") else None
+        if inp is not None and inp.is_linked:
+            img = _trace_image(inp, depth + 1)
+            if img is not None:
+                return img
+    for inp in node.inputs:
+        if inp.is_linked:
+            img = _trace_image(inp, depth + 1)
+            if img is not None:
+                return img
+    return None
+
+
+def _material_images(bsdf):
+    """Map each PBR texture channel to a Blender Image datablock (or None)."""
+    imgs = {ch: None for ch in _TEX_CHANNELS}
+    if bsdf is None:
+        return imgs
+    inputs = bsdf.inputs
+    imgs[TEX_BASECOLOR] = _trace_image(inputs.get('Base Color'))
+    imgs[TEX_NORMAL] = _trace_image(inputs.get('Normal'))
+    emission = inputs.get('Emission Color') or inputs.get('Emission')
+    imgs[TEX_EMISSIVE] = _trace_image(emission)
+    # Combined metallic-roughness: only when the SAME image feeds both sockets
+    # (the glTF ORM / Separate-Color convention). Separate/scalar inputs fall
+    # back to the scalar metallic/roughness values.
+    mimg = _trace_image(inputs.get('Metallic'))
+    rimg = _trace_image(inputs.get('Roughness'))
+    if mimg is not None and mimg == rimg:
+        imgs[TEX_METALROUGH] = mimg
+    return imgs
+
+
+def _material_scalars(obj, imgs):
     rgba = (0.8, 0.8, 0.8, 1.0)
     metallic, roughness = 0.0, 0.6
+    emissive = (0.0, 0.0, 0.0)
+    emissive_strength = 0.0
     mat = obj.active_material
-    if mat is not None and getattr(mat, "use_nodes", False):
-        bsdf = None
-        for n in mat.node_tree.nodes:
-            if n.type == 'BSDF_PRINCIPLED':
-                bsdf = n
-                break
-        if bsdf is not None:
-            try:
-                bc = bsdf.inputs['Base Color'].default_value
-                rgba = (bc[0], bc[1], bc[2], bc[3])
-            except Exception:
-                pass
-            try:
-                metallic = float(bsdf.inputs['Metallic'].default_value)
-                roughness = float(bsdf.inputs['Roughness'].default_value)
-            except Exception:
-                pass
+    bsdf = _find_principled(mat)
+    if bsdf is not None:
+        try:
+            bc = bsdf.inputs['Base Color'].default_value
+            rgba = (bc[0], bc[1], bc[2], bc[3])
+        except Exception:
+            pass
+        try:
+            metallic = float(bsdf.inputs['Metallic'].default_value)
+            roughness = float(bsdf.inputs['Roughness'].default_value)
+        except Exception:
+            pass
+        try:
+            em = bsdf.inputs.get('Emission Color') or bsdf.inputs.get('Emission')
+            if em is not None:
+                ec = em.default_value
+                emissive = (ec[0], ec[1], ec[2])
+            es = bsdf.inputs.get('Emission Strength')
+            emissive_strength = float(es.default_value) if es is not None else 1.0
+        except Exception:
+            pass
     elif mat is not None:
         c = mat.diffuse_color
         rgba = (c[0], c[1], c[2], c[3])
-    return rgba, metallic, roughness
+    # A base-colour texture multiplies baseColor; use white so the (often black)
+    # socket default doesn't tint it out.
+    if imgs.get(TEX_BASECOLOR) is not None:
+        rgba = (1.0, 1.0, 1.0, rgba[3])
+    return rgba, metallic, roughness, emissive, emissive_strength
 
 
-def _emit_material(enc, obj, node_id):
-    rgba, metallic, roughness = _material_tuple(obj)
-    enc.upsert_material(node_id, rgba, metallic, roughness)
+def _image_key(img):
+    """Cheap identity used for change detection (no pixel data)."""
+    if img is None:
+        return None
+    try:
+        return (img.name, tuple(img.size), img.filepath, bool(getattr(img, 'is_dirty', False)))
+    except Exception:
+        return (getattr(img, 'name', '?'),)
+
+
+def _save_temp_png(img):
+    """Re-encode any image to PNG via a temporary, non-mutating copy."""
+    import bpy
+    import tempfile
+    copy = None
+    path = None
+    try:
+        copy = img.copy()
+        copy.file_format = 'PNG'
+        fd, path = tempfile.mkstemp(suffix='.png')
+        os.close(fd)
+        copy.filepath_raw = path
+        copy.save()
+        with open(path, 'rb') as f:
+            return f.read()
+    except Exception as exc:
+        print('[BLP] temp PNG encode failed for %s: %s' % (getattr(img, 'name', '?'), exc))
+        return None
+    finally:
+        if copy is not None:
+            try:
+                bpy.data.images.remove(copy)
+            except Exception:
+                pass
+        if path and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+
+def _image_encoded_bytes(img):
+    """Return decodable encoded-image bytes for a Blender image, or None."""
+    if img is None:
+        return None
+    # 1. Packed image: packed_file.data holds the original file bytes.
+    try:
+        if img.packed_file is not None and img.packed_file.data:
+            return bytes(img.packed_file.data)
+    except Exception:
+        pass
+    # 2. File on disk in a bimg-decodable raster format: read as-is.
+    try:
+        import bpy
+        raw = img.filepath_from_user() or img.filepath
+        path = bpy.path.abspath(raw) if raw else None
+        if path and os.path.isfile(path):
+            if os.path.splitext(path)[1].lower() in _RASTER_EXTS:
+                with open(path, 'rb') as f:
+                    return f.read()
+    except Exception:
+        pass
+    # 3. Fallback: re-encode to PNG (generated images, exotic formats).
+    return _save_temp_png(img)
+
+
+def _capture_material(obj):
+    """Return (scalars, imgs, signature). Signature is cheap/hashable and used
+    for incremental change detection; imgs are datablocks (bytes extracted only
+    when actually emitting)."""
+    bsdf = _find_principled(obj.active_material)
+    imgs = _material_images(bsdf)
+    scalars = _material_scalars(obj, imgs)
+    sig = (scalars, tuple((ch, _image_key(imgs.get(ch))) for ch in _TEX_CHANNELS))
+    return scalars, imgs, sig
+
+
+def _emit_material(enc, node_id, scalars, imgs, prev_channels=None):
+    """Emit scalars + per-channel textures. Returns the set of channels that now
+    carry a texture, so callers can clear channels that disappeared."""
+    rgba, metallic, roughness, emissive, emissive_strength = scalars
+    enc.upsert_material(node_id, rgba, metallic, roughness, emissive, emissive_strength)
+    active = set()
+    for ch in _TEX_CHANNELS:
+        img = imgs.get(ch)
+        if img is None:
+            continue
+        data = _image_encoded_bytes(img)
+        if data:
+            enc.upsert_material_texture(node_id, ch, data)
+            active.add(ch)
+    if prev_channels:
+        for ch in prev_channels:
+            if ch not in active:
+                enc.upsert_material_texture(node_id, ch, None)  # clear
+    return active
 
 
 def _light_tuple(obj):
@@ -310,7 +530,7 @@ class SceneSync:
     def __init__(self):
         self._ids = {}
         self._counter = 1
-        self._state = {}  # name -> {'m','geo','mat','kind'}
+        self._state = {}  # name -> {'m','geo','matsig','texch','kind'}
 
     def _id(self, name):
         if name not in self._ids:
@@ -381,11 +601,13 @@ class SceneSync:
             pos, quat, scale = _node_trs(obj)
             enc.upsert_node(node_id, 0, KIND_MESH, obj.name, pos, quat, scale)
             _emit_geometry(enc, obj, node_id, depsgraph)
-            _emit_material(enc, obj, node_id)
+            scalars, imgs, matsig = _capture_material(obj)
+            texch = _emit_material(enc, node_id, scalars, imgs)
             self._state[obj.name] = {
                 'm': _matrix_key(obj.matrix_world),
                 'geo': _geo_key(obj),
-                'mat': _material_tuple(obj),
+                'matsig': matsig,
+                'texch': texch,
                 'kind': 'MESH',
             }
         elif obj.type == 'LIGHT':
@@ -419,10 +641,10 @@ class SceneSync:
             st['m'] = mkey
             changed = True
 
-        mat = _material_tuple(obj)
-        if mat != st['mat']:
-            _emit_material(enc, obj, node_id)
-            st['mat'] = mat
+        scalars, imgs, matsig = _capture_material(obj)
+        if matsig != st.get('matsig'):
+            st['texch'] = _emit_material(enc, node_id, scalars, imgs, st.get('texch'))
+            st['matsig'] = matsig
             changed = True
 
         return changed

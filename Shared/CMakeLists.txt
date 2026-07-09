@@ -32,6 +32,7 @@ target_link_libraries(BabylonLivePreviewCore
     PUBLIC Window
     PUBLIC ScriptLoader
     PUBLIC XMLHttpRequest
+    PUBLIC URL
     PUBLIC Canvas)
 
 if(WIN32)

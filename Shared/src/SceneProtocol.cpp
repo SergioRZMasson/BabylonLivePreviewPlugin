@@ -130,12 +130,31 @@ namespace BabylonLivePreview
 
     void CommandEncoder::UpsertMaterial(uint64_t nodeId,
         float r, float g, float b, float a,
-        float metallic, float roughness)
+        float metallic, float roughness,
+        float emissiveR, float emissiveG, float emissiveB,
+        float emissiveStrength)
     {
         PutU16(static_cast<uint16_t>(CommandType::UpsertMaterial));
         PutU64(nodeId);
         PutF32(r); PutF32(g); PutF32(b); PutF32(a);
         PutF32(metallic); PutF32(roughness);
+        PutF32(emissiveR); PutF32(emissiveG); PutF32(emissiveB);
+        PutF32(emissiveStrength);
+        ++m_count;
+    }
+
+    void CommandEncoder::UpsertMaterialTexture(uint64_t nodeId, MaterialTextureChannel channel,
+        TextureEncoding encoding, const uint8_t* data, uint32_t len)
+    {
+        PutU16(static_cast<uint16_t>(CommandType::UpsertMaterialTexture));
+        PutU64(nodeId);
+        PutU16(static_cast<uint16_t>(channel));
+        PutU8(static_cast<uint8_t>(encoding));
+        PutU32(len);
+        if (data && len > 0)
+        {
+            m_body.insert(m_body.end(), data, data + len);
+        }
         ++m_count;
     }
 
