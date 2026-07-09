@@ -20,6 +20,7 @@
 #include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
 #include <maya/MPxCommand.h>
+#include <maya/MRenderView.h>
 #include <maya/MSyntax.h>
 #include <maya/MTimerMessage.h>
 
@@ -50,6 +51,10 @@ namespace
         MCallbackId timerId = 0;
         uint32_t width = 1280;
         uint32_t height = 720;
+        // Live display via Maya's Render View (shader-free; absent in batch mode).
+        bool renderViewActive = false;
+        uint32_t rvWidth = 0;
+        uint32_t rvHeight = 0;
     };
 
     PluginState g_state;
@@ -136,12 +141,68 @@ namespace
         g_state.session->SubmitCommands(buf.data(), buf.size());
     }
 
+    // Push a CPU readback (tightly-packed RGBA8, top-to-bottom) to Maya's Render
+    // View. RV_PIXEL is float RGBA in 0..255; the Render View origin is bottom-
+    // left, so rows are flipped. No-op in batch mode (no render editor).
+    void PushToRenderView(const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h)
+    {
+        if (w == 0 || h == 0 || rgba.size() < static_cast<size_t>(w) * h * 4) return;
+        if (!MRenderView::doesRenderEditorExist()) return;
+
+        if (!g_state.renderViewActive || w != g_state.rvWidth || h != g_state.rvHeight)
+        {
+            if (MRenderView::startRender(w, h, false, true) != MS::kSuccess) return;
+            g_state.rvWidth = w;
+            g_state.rvHeight = h;
+            g_state.renderViewActive = true;
+        }
+
+        std::vector<RV_PIXEL> pixels(static_cast<size_t>(w) * h);
+        for (uint32_t y = 0; y < h; ++y)
+        {
+            const uint32_t srcRow = h - 1 - y; // flip vertically for bottom-left origin
+            for (uint32_t x = 0; x < w; ++x)
+            {
+                const uint8_t* s = &rgba[(static_cast<size_t>(srcRow) * w + x) * 4];
+                RV_PIXEL& d = pixels[static_cast<size_t>(y) * w + x];
+                d.r = static_cast<float>(s[0]);
+                d.g = static_cast<float>(s[1]);
+                d.b = static_cast<float>(s[2]);
+                d.a = static_cast<float>(s[3]);
+            }
+        }
+        MRenderView::updatePixels(0, w - 1, 0, h - 1, pixels.data());
+        MRenderView::refresh(0, w - 1, 0, h - 1);
+    }
+
+    void StopRenderView()
+    {
+        if (g_state.renderViewActive && MRenderView::doesRenderEditorExist())
+        {
+            MRenderView::endRender();
+        }
+        g_state.renderViewActive = false;
+        g_state.rvWidth = 0;
+        g_state.rvHeight = 0;
+    }
+
     void TimerCallback(float, float, void*)
     {
         if (!g_state.session || !g_state.translator) return;
-        // Incremental re-sync + advance a frame. (Viewport display: TODO.)
+
+        // Push scene edits, advance a frame, and display the previous readback.
         SyncScene(true);
         g_state.session->RenderFrame();
+
+        // Acquire the frame requested last tick BEFORE requesting the next one
+        // (RequestReadback clears the ready flag), then display it.
+        std::vector<uint8_t> rgba;
+        uint32_t rw = 0, rh = 0;
+        if (g_state.session->TryAcquireReadback(rgba, rw, rh))
+        {
+            PushToRenderView(rgba, rw, rh);
+        }
+        g_state.session->RequestReadback();
     }
 
     // ------------------------------------------------------------------
@@ -213,12 +274,17 @@ namespace
             SyncScene(false);
             for (int i = 0; i < 30; ++i) { g_state.session->RenderFrame(); std::this_thread::sleep_for(std::chrono::milliseconds(8)); }
 
+            // Prime the readback pipeline so the first timer tick has a frame to
+            // display in the Render View.
+            g_state.session->RequestReadback();
+
             if (g_state.timerId == 0)
             {
                 MStatus st;
                 g_state.timerId = MTimerMessage::addTimerCallback(0.1f, TimerCallback, nullptr, &st);
             }
-            MGlobal::displayInfo("BabylonLivePreview: started (live sync running)");
+            MGlobal::displayInfo("BabylonLivePreview: started. Open the Render View (Windows > "
+                "Rendering Editors > Render View) to see the live Babylon preview.");
             return MS::kSuccess;
         }
 
@@ -229,6 +295,7 @@ namespace
                 MMessage::removeCallback(g_state.timerId);
                 g_state.timerId = 0;
             }
+            StopRenderView();
             g_state.translator.reset();
             g_state.session.reset();
         }
@@ -281,6 +348,11 @@ MStatus uninitializePlugin(MObject obj)
         MMessage::removeCallback(g_state.timerId);
         g_state.timerId = 0;
     }
+    if (g_state.renderViewActive && MRenderView::doesRenderEditorExist())
+    {
+        MRenderView::endRender();
+    }
+    g_state.renderViewActive = false;
     g_state.translator.reset();
     g_state.session.reset();
     MFnPlugin plugin(obj);

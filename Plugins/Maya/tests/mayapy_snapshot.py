@@ -95,6 +95,17 @@ def main():
         else:
             print("[mayatest] CHECK (few lit pixels)")
 
+    # Exercise the live start/stop path in batch mode: the Render View display
+    # must degrade to a no-op (doesRenderEditorExist() == False) without error.
+    try:
+        cmds.babylonLivePreview(start=True, width=320, height=240)
+        print("[mayatest] -start OK (batch: Render View display no-ops)")
+        cmds.babylonLivePreview(stop=True)
+        print("[mayatest] -stop OK")
+    except Exception as exc:
+        print("[mayatest] start/stop FAILED:", exc)
+        result = 1
+
     try:
         cmds.unloadPlugin(os.path.basename(_MLL).replace(".mll", ""))
     except Exception as exc:
