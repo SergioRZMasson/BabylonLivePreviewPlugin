@@ -18,6 +18,7 @@ export enum CommandType {
     UpsertLight = 6,
     SetCamera = 7,
     UpsertMaterialTexture = 8,
+    BindNodePath = 9,
     ResetScene = 10,
     SetClearColor = 11,
 }
@@ -217,6 +218,20 @@ export class CommandWriter {
     removeNode(id: number): this {
         this.body.u16(CommandType.RemoveNode);
         this.body.u64(id);
+        this.count++;
+        return this;
+    }
+
+    /**
+     * Bind an existing scene node (e.g. a node from a loaded glTF) to `id` by its
+     * stable `path` (glTF node name / USD PrimPath). Subsequent id-addressed
+     * commands then drive that pre-loaded node — the "bake once, update often"
+     * path. The client must have loaded the asset before this is applied.
+     */
+    bindNodePath(id: number, path: string): this {
+        this.body.u16(CommandType.BindNodePath);
+        this.body.u64(id);
+        this.string(path);
         this.count++;
         return this;
     }

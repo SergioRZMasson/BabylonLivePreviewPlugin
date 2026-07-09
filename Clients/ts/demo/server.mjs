@@ -26,7 +26,9 @@ const STATIC = {
     "/": { path: resolve(here, "index.html"), type: "text/html" },
     "/index.html": { path: resolve(here, "index.html"), type: "text/html" },
     "/babylon.js": { path: resolve(repoRoot, "node_modules/babylonjs/babylon.js"), type: "text/javascript" },
+    "/babylonjs.loaders.js": { path: resolve(repoRoot, "node_modules/babylonjs-loaders/babylonjs.loaders.min.js"), type: "text/javascript" },
     "/babylon-live-sync.umd.js": { path: resolve(here, "..", "dist/babylon-live-sync.umd.js"), type: "text/javascript" },
+    "/baked.gltf": { path: resolve(here, "baked.gltf"), type: "model/gltf+json" },
 };
 
 const server = http.createServer(async (req, res) => {

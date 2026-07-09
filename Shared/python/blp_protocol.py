@@ -24,6 +24,7 @@ CMD_UPSERT_MATERIAL = 5
 CMD_UPSERT_LIGHT = 6
 CMD_SET_CAMERA = 7
 CMD_UPSERT_MATERIAL_TEXTURE = 8
+CMD_BIND_NODE_PATH = 9
 CMD_RESET_SCENE = 10
 CMD_SET_CLEAR_COLOR = 11
 
@@ -90,6 +91,14 @@ class CommandEncoder:
     def remove_node(self, node_id):
         self._u16(CMD_REMOVE_NODE)
         self._body += struct.pack("<Q", int(node_id))
+        self._count += 1
+
+    def bind_node_path(self, node_id, path):
+        """Bind a pre-loaded node (e.g. from a baked glTF) to `node_id` by its
+        stable `path` (glTF node name / USD PrimPath)."""
+        self._u16(CMD_BIND_NODE_PATH)
+        self._body += struct.pack("<Q", int(node_id))
+        self._string(path)
         self._count += 1
 
     def set_transform(self, node_id, pos, quat, scale):

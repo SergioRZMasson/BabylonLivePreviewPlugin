@@ -31,6 +31,7 @@ namespace BabylonLivePreview
         UpsertLight = 6,        // id, type, dir[3], color[3], intensity
         SetCamera = 7,          // mode + params (arcRotate) or view/proj matrices
         UpsertMaterialTexture = 8, // nodeId, channel, encoding, byteLength, bytes (byteLength 0 = clear)
+        BindNodePath = 9,       // id, path (bind a pre-loaded node by stable path)
         ResetScene = 10,        // (none) — dispose current scene, start empty
         SetClearColor = 11,     // rgba[4]
     };
@@ -85,6 +86,10 @@ namespace BabylonLivePreview
             float sx, float sy, float sz);
 
         void RemoveNode(uint64_t id);
+
+        // Bind an existing (pre-loaded, e.g. glTF-baked) scene node to `id` by
+        // its stable path (glTF node name / USD PrimPath).
+        void BindNodePath(uint64_t id, const std::string& path);
 
         void SetTransform(uint64_t id,
             float px, float py, float pz,

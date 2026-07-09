@@ -5,6 +5,8 @@
 /.vs/
 # Generated TypeScript bundles (built from Clients/ts/src)
 /Clients/ts/dist/
+# Generated USD-bake artifact
+/Clients/ts/demo/baked.gltf
 
 # Node
 /node_modules/

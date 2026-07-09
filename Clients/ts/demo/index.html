@@ -20,6 +20,8 @@
 
     <!-- Babylon engine (provides the global BABYLON) -->
     <script src="/babylon.js"></script>
+    <!-- glTF loader (for the bake-once flow) -->
+    <script src="/babylonjs.loaders.js"></script>
     <!-- The Live Sync UMD bundle (provides window.BabylonLiveSync) -->
     <script src="/babylon-live-sync.umd.js"></script>
     <script>
@@ -27,18 +29,29 @@
 
         const canvas = document.getElementById("view");
         const status = document.getElementById("status");
+        const params = new URLSearchParams(location.search);
 
         // The host owns the engine, scene and render loop. Live Sync only applies
         // scene-delta buffers to this scene — the camera, lights, meshes and their
-        // animation all arrive over the WebSocket.
+        // animation all arrive over the WebSocket. In the bake-once flow, the
+        // geometry is loaded once from a glTF (?gltf=) and deltas are addressed to
+        // those nodes by path (BindNodePath).
         const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true });
         const scene = new BABYLON.Scene(engine);
 
-        const url = new URLSearchParams(location.search).get("ws") || ("ws://" + location.host);
-        const sync = new LiveSync(scene, { source: url });
-        sync.start()
-            .then(() => { status.textContent = "live from " + url; })
-            .catch((e) => { status.textContent = "error: " + e; });
+        const url = params.get("ws") || ("ws://" + location.host);
+        const gltf = params.get("gltf");
+
+        async function boot() {
+            if (gltf) {
+                status.textContent = "loading " + gltf + " …";
+                await BABYLON.SceneLoader.AppendAsync("", gltf, scene);
+            }
+            const sync = new LiveSync(scene, { source: url });
+            await sync.start();
+            status.textContent = (gltf ? "baked glTF + " : "") + "live from " + url;
+        }
+        boot().catch((e) => { status.textContent = "error: " + e; });
 
         engine.runRenderLoop(() => {
             if (scene.activeCamera) {

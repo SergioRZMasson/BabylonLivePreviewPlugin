@@ -170,6 +170,55 @@ class UsdBridge:
         enc.set_camera_arcrotate(alpha, beta, radius, target)
 
     # --- public: snapshot + delta ---------------------------------------
+    def _raw_trs(self, prim):
+        """USD-space (glTF-space) TRS — no Babylon conversion. Used for the
+        bake-once flow, where the glTF and the deltas share glTF space."""
+        world = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        xf = Gf.Transform(world)
+        t = xf.GetTranslation()
+        q = xf.GetRotation().GetQuat()
+        s = xf.GetScale()
+        qi = q.GetImaginary()
+        return ((t[0], t[1], t[2]), (qi[0], qi[1], qi[2], q.GetReal()), (s[0], s[1], s[2]))
+
+    def _mesh_records(self):
+        """Collect glTF-space mesh data for baking (positions local, raw TRS)."""
+        records = []
+        for prim in self.stage.Traverse():
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            mesh = UsdGeom.Mesh(prim)
+            pts = mesh.GetPointsAttr().Get()
+            counts = mesh.GetFaceVertexCountsAttr().Get()
+            idx = mesh.GetFaceVertexIndicesAttr().Get()
+            if not pts or not counts or not idx:
+                continue
+            positions = []
+            for p in pts:
+                positions += [p[0], p[1], p[2]]
+            indices = []
+            o = 0
+            for c in counts:
+                for k in range(1, c - 1):
+                    indices += [idx[o], idx[o + k], idx[o + k + 1]]
+                o += c
+            t, q, s = self._raw_trs(prim)
+            records.append({
+                "name": str(prim.GetPath()),
+                "positions": positions,
+                "indices": indices,
+                "base_color": self._base_color(prim),
+                "translation": t,
+                "rotation": q,
+                "scale": s,
+            })
+        return records
+
+    def export_gltf(self, out_path):
+        """Bake the stage's meshes to a self-contained glTF (node.name=PrimPath)."""
+        import gltf_export
+        return gltf_export.write_gltf(self._mesh_records(), out_path)
+
     def build_snapshot(self):
         enc = blp.CommandEncoder()
         enc.reset_scene()
@@ -192,8 +241,32 @@ class UsdBridge:
             enc.upsert_light(1000000, blp.LIGHT_HEMISPHERIC, (0.2, 1.0, 0.3), (1.0, 1.0, 1.0), 0.7)
         return enc.finish()
 
-    def build_delta(self, prim_paths):
-        """Emit transform/material updates for the given (already-known) prims."""
+    def build_snapshot_baked(self):
+        """Baked flow: the client has already loaded the glTF. Bind each mesh to
+        its pre-loaded node by path (no geometry), then add camera + lights. No
+        ResetScene — that would drop the loaded glTF."""
+        enc = blp.CommandEncoder()
+        enc.set_clear_color((0.05, 0.06, 0.09, 1.0))
+        camera_prim = None
+        light_count = 0
+        for prim in self.stage.Traverse():
+            if prim.IsA(UsdGeom.Mesh):
+                enc.bind_node_path(self._id(prim.GetPath()), str(prim.GetPath()))
+            elif prim.IsA(UsdLux.BoundableLightBase) or prim.IsA(UsdLux.NonboundableLightBase):
+                self._emit_light(enc, prim)
+                light_count += 1
+            elif prim.IsA(UsdGeom.Camera) and camera_prim is None:
+                camera_prim = prim
+        if camera_prim is not None:
+            self._emit_camera(enc, camera_prim)
+        if light_count == 0:
+            enc.upsert_light(1000000, blp.LIGHT_HEMISPHERIC, (0.2, 1.0, 0.3), (1.0, 1.0, 1.0), 0.7)
+        return enc.finish()
+
+    def build_delta(self, prim_paths, baked=False):
+        """Emit transform/material updates for the given (already-known) prims.
+        In baked mode, transforms are in glTF space (raw), matching the baked
+        node's local frame; otherwise they are Babylon-converted."""
         enc = blp.CommandEncoder()
         for path in prim_paths:
             prim = self.stage.GetPrimAtPath(path)
@@ -201,9 +274,12 @@ class UsdBridge:
                 continue
             if prim.IsA(UsdGeom.Mesh):
                 node_id = self._id(prim.GetPath())
-                pos, quat, scale = self._node_trs(prim)
+                if baked:
+                    pos, quat, scale = self._raw_trs(prim)
+                else:
+                    pos, quat, scale = self._node_trs(prim)
+                    enc.upsert_material(node_id, self._base_color(prim), 0.0, 0.6)
                 enc.set_transform(node_id, pos, quat, scale)
-                enc.upsert_material(node_id, self._base_color(prim), 0.0, 0.6)
             elif prim.IsA(UsdLux.BoundableLightBase) or prim.IsA(UsdLux.NonboundableLightBase):
                 self._emit_light(enc, prim)
         return None if enc.empty() else enc.finish()
@@ -213,13 +289,20 @@ class UsdBridge:
 # WebSocket server + change notices
 # ---------------------------------------------------------------------------
 
-async def serve(stage, host="localhost", port=8765, throttle_ms=50):
+async def serve(stage, host="localhost", port=8765, throttle_ms=50, baked=False, animate=False):
     import websockets
 
     bridge = UsdBridge(stage)
     clients = set()
     dirty = set()
     lock = threading.Lock()
+
+    # In baked mode the client loads a glTF first; bind ids to prim paths up front
+    # so change notices for those prims produce deltas.
+    if baked:
+        for prim in stage.Traverse():
+            if prim.IsA(UsdGeom.Mesh):
+                bridge._id(prim.GetPath())
 
     def on_changed(notice, sender):
         with lock:
@@ -233,7 +316,7 @@ async def serve(stage, host="localhost", port=8765, throttle_ms=50):
     async def handler(ws):
         clients.add(ws)
         try:
-            await ws.send(bridge.build_snapshot())
+            await ws.send(bridge.build_snapshot_baked() if baked else bridge.build_snapshot())
             await ws.wait_closed()
         finally:
             clients.discard(ws)
@@ -247,7 +330,7 @@ async def serve(stage, host="localhost", port=8765, throttle_ms=50):
                     continue
                 paths = list(dirty)
                 dirty.clear()
-            buf = bridge.build_delta(paths)
+            buf = bridge.build_delta(paths, baked=baked)
             if buf:
                 for ws in list(clients):
                     try:
@@ -255,9 +338,32 @@ async def serve(stage, host="localhost", port=8765, throttle_ms=50):
                     except Exception:
                         clients.discard(ws)
 
+    async def animator():
+        """Demo driver: orbit the first mesh by editing the stage, so clients see
+        the full stage-edit -> ObjectsChanged -> delta loop with no external tool."""
+        import time
+        prim = next((p for p in stage.Traverse() if p.IsA(UsdGeom.Mesh)), None)
+        if prim is None:
+            return
+        xf = UsdGeom.Xformable(prim)
+        op = next((o for o in xf.GetOrderedXformOps()
+                   if o.GetOpType() == UsdGeom.XformOp.TypeTranslate), None)
+        if op is None:
+            op = xf.AddTranslateOp()
+        start = time.time()
+        while True:
+            await asyncio.sleep(0.05)
+            t = time.time() - start
+            op.Set(Gf.Vec3d(math.cos(t) * 2.0, 1.0, math.sin(t) * 2.0))
+
     async with websockets.serve(handler, host, port):
-        print("[usd-bridge] serving %s on ws://%s:%d" % (stage.GetRootLayer().identifier, host, port))
-        await broadcaster()
+        mode = "baked (bind glTF nodes by path)" if baked else "streaming geometry"
+        print("[usd-bridge] serving %s [%s%s] on ws://%s:%d" %
+              (stage.GetRootLayer().identifier, mode, ", animating" if animate else "", host, port))
+        if animate:
+            await asyncio.gather(broadcaster(), animator())
+        else:
+            await broadcaster()
     del listener
 
 
@@ -266,14 +372,26 @@ def main():
     ap.add_argument("--stage", required=True, help="USD stage path or omniverse:// URL")
     ap.add_argument("--host", default="localhost")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--bake", metavar="OUT.gltf",
+                    help="Bake the stage's meshes to a glTF (node.name=PrimPath) and exit.")
+    ap.add_argument("--baked", action="store_true",
+                    help="Serve in baked mode: bind pre-loaded glTF nodes by path + stream deltas.")
+    ap.add_argument("--animate", action="store_true",
+                    help="Demo: orbit the first mesh by editing the stage on a timer.")
     args = ap.parse_args()
 
     stage = Usd.Stage.Open(args.stage)
     if stage is None:
         print("[usd-bridge] failed to open stage: %s" % args.stage)
         sys.exit(2)
+
+    if args.bake:
+        out = UsdBridge(stage).export_gltf(args.bake)
+        print("[usd-bridge] baked glTF -> %s" % out)
+        return
+
     try:
-        asyncio.run(serve(stage, args.host, args.port))
+        asyncio.run(serve(stage, args.host, args.port, baked=args.baked, animate=args.animate))
     except KeyboardInterrupt:
         print("\n[usd-bridge] stopped")
 

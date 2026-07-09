@@ -74,6 +74,11 @@ def walk(buf):
             (blen,) = struct.unpack_from("<I", buf, off); off += 4
             off += blen
             rec.update(id=nid, channel=ch, len=blen)
+        elif ctype == blp.CMD_BIND_NODE_PATH:
+            (nid,) = struct.unpack_from("<Q", buf, off); off += 8
+            (plen,) = struct.unpack_from("<H", buf, off); off += 2
+            path = buf[off:off + plen].decode("utf-8"); off += plen
+            rec.update(id=nid, path=path)
         else:
             raise AssertionError("unknown cmd %d" % ctype)
         out.setdefault(ctype, []).append(rec)
@@ -117,6 +122,16 @@ def main():
     check(8 in geos and geos[8]["idx"] == 36, "cube geometry: 8 verts, 36 indices")
     check(4 in geos and geos[4]["idx"] == 6, "ground geometry: 4 verts, 6 indices")
 
+    # --- baked snapshot: bind pre-loaded glTF nodes by path, no geometry, no reset ---
+    baked = walk(bridge.build_snapshot_baked())
+    print("[usdtest] baked snapshot commands:", {k: len(v) for k, v in baked.items()})
+    check(len(baked.get(blp.CMD_BIND_NODE_PATH, [])) == 2, "two BindNodePath (Cube + Ground)")
+    check(len(baked.get(blp.CMD_UPSERT_MESH_GEOMETRY, [])) == 0, "no geometry streamed in baked mode")
+    check(len(baked.get(blp.CMD_RESET_SCENE, [])) == 0, "no ResetScene in baked mode (keeps glTF)")
+    check(len(baked.get(blp.CMD_SET_CAMERA, [])) == 1, "baked snapshot has a camera")
+    binds = {r["path"] for r in baked.get(blp.CMD_BIND_NODE_PATH, [])}
+    check(binds == {"/World/Cube", "/World/Ground"}, "binds by PrimPath: %s" % sorted(binds))
+
     # --- change delta: move the cube in Z and re-read ---
     cube = stage.GetPrimAtPath("/World/Cube")
     xf = UsdGeom.Xformable(cube)
@@ -131,6 +146,14 @@ def main():
         # USD (2,1,3) Y-up -> Babylon (2,1,-3).
         check(st and abs(st[0]["pos"][0] - 2.0) < 1e-4 and abs(st[0]["pos"][2] + 3.0) < 1e-4,
               "SetTransform position basis-converted to (2,1,-3): %s" % (str(st[0]["pos"]) if st else None))
+
+    # Baked delta keeps glTF space (raw USD), matching the baked node's frame.
+    baked_delta = bridge.build_delta([cube.GetPath()], baked=True)
+    if baked_delta:
+        bd = walk(baked_delta)
+        bst = bd.get(blp.CMD_SET_TRANSFORM, [])
+        check(bst and abs(bst[0]["pos"][0] - 2.0) < 1e-4 and abs(bst[0]["pos"][2] - 3.0) < 1e-4,
+              "baked SetTransform keeps USD space (2,1,3): %s" % (str(bst[0]["pos"]) if bst else None))
 
     if failures == 0:
         print("[usdtest] ALL PASS")

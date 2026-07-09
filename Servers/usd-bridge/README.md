@@ -56,9 +56,30 @@ the Babylon scene updates within a frame.
 
 ## Current scope & follow-ups
 
-This first bridge **builds the scene via the protocol** (streams geometry). The
-architecture's "bake glTF once, stream deltas addressed by PrimPath" optimization
-(for large scenes) is a follow-up, and needs the protocol's path-addressing mode
-(see `Plugins/Omniverse/Plan.md`). Also deferred: UsdShade → PBR material/texture
-translation (currently `displayColor` only), UsdSkel/animation, instancing, and
-camera orientation (the arc camera currently looks at the origin).
+Two flows are supported:
+
+- **Streaming** (default) — the bridge streams geometry over the protocol
+  (`build_snapshot` + geometry). Simple; good for small/medium stages.
+- **Bake once, update often** (`--baked`) — the bridge bakes the stage's meshes
+  to a **glTF** (`--bake out.gltf`, node.name = PrimPath); the client loads that
+  once, and the bridge sends **`BindNodePath(id, primPath)`** to bind each loaded
+  node, then streams only transform/material **deltas** addressed by path. This
+  is the scalable path for large scenes (geometry loads via the glTF loader / a
+  CDN, not the socket).
+
+```powershell
+# bake, then serve baked + self-animate for a demo:
+python Servers/usd-bridge/bridge.py --stage Servers/usd-bridge/sample.usda --bake Clients/ts/demo/baked.gltf
+python Servers/usd-bridge/bridge.py --stage Servers/usd-bridge/sample.usda --port 8765 --baked --animate
+node Clients/ts/demo/server.mjs --port 8080
+#   open  http://localhost:8080/?ws=ws://localhost:8765&gltf=/baked.gltf
+```
+
+Baked geometry + node transforms are written in glTF space (≈ Y-up USD space);
+Babylon's glTF loader converts on load, and the baked deltas are sent in the same
+(un-converted) space, so bound nodes and deltas stay in one frame.
+
+Deferred: UsdShade → PBR material/texture translation (currently `displayColor`
+only), UsdSkel/animation, instancing, camera orientation (the arc camera looks at
+the origin), and baking lights/cameras into the glTF.
+

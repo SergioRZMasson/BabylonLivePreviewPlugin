@@ -98,6 +98,7 @@ export class SceneApplier {
             case CommandType.UpsertLight: return this.cmdUpsertLight(r);
             case CommandType.SetCamera: return this.cmdSetCamera(r);
             case CommandType.UpsertMaterialTexture: return this.cmdUpsertMaterialTexture(r);
+            case CommandType.BindNodePath: return this.cmdBindNodePath(r);
             case CommandType.ResetScene: return this.cmdResetScene();
             case CommandType.SetClearColor: return this.cmdSetClearColor(r);
             default:
@@ -207,6 +208,34 @@ export class SceneApplier {
         if (node) {
             try { node.dispose(); } catch { /* ignore */ }
             delete this.nodeById[String(id)];
+        }
+    }
+
+    // Bind a pre-loaded node (e.g. from a loaded glTF) to `id` by its stable
+    // path. Resolution: exact node name (glTF exporters can set node.name to the
+    // path), then a metadata scan (extras.usdPath / metadata.usdPath). After
+    // binding, id-addressed commands drive that node. No-op if not found yet.
+    private cmdBindNodePath(r: Reader): void {
+        const id = r.u64();
+        const path = r.string();
+        const scene = this.scene;
+        if (!scene) {
+            return;
+        }
+        let node: AnyNode = scene.getNodeByName(path);
+        if (!node) {
+            const pools: AnyNode[] = ([] as AnyNode[]).concat(
+                scene.transformNodes as AnyNode[], scene.meshes as AnyNode[]);
+            for (const n of pools) {
+                const md = n.metadata;
+                const usdPath = md && ((md.gltf && md.gltf.extras && md.gltf.extras.usdPath) || md.usdPath);
+                if (usdPath === path) { node = n; break; }
+            }
+        }
+        if (node) {
+            this.registerNode(id, node);
+        } else {
+            console.warn("[live_sync] BindNodePath: no node for path '" + path + "' (load the asset first?)");
         }
     }
 

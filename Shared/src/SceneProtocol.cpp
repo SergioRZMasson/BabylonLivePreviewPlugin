@@ -93,6 +93,14 @@ namespace BabylonLivePreview
         ++m_count;
     }
 
+    void CommandEncoder::BindNodePath(uint64_t id, const std::string& path)
+    {
+        PutU16(static_cast<uint16_t>(CommandType::BindNodePath));
+        PutU64(id);
+        PutString(path);
+        ++m_count;
+    }
+
     void CommandEncoder::SetTransform(uint64_t id,
         float px, float py, float pz,
         float qx, float qy, float qz, float qw,
