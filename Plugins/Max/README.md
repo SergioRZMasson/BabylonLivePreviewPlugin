@@ -61,8 +61,11 @@ bundle and the Babylon Native / V8 runtime DLLs staged alongside.
 
 ## Known follow-ups
 
-- Physical Material metalness/roughness parameter access (currently base color +
-  glossiness→roughness from the generic `Mtl` interface).
+- **Compile it.** The code is complete but SDK‑gated: install the 3ds Max SDK and
+  configure with `-DBLP_BUILD_MAX=ON -DMAX_SDK_ROOT=<…/maxsdk>`. It has not been
+  compiled or run on a machine without the SDK.
 - Smoothing-group-aware vertex normals (currently per-face normals).
 - Node-change notifications (currently a periodic incremental re-sync).
 - True in-viewport (Nitrous) overlay instead of the VFB window.
+- Roughness/glossiness‑mode toggle on the Physical Material (currently reads the
+  `roughness` param directly; assumes roughness, not inverted glossiness).

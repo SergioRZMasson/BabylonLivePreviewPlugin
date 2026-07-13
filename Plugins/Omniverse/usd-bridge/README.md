@@ -41,9 +41,12 @@ the Babylon scene updates within a frame.
 ## How it works
 
 - **`bridge.py`** — `UsdBridge.build_snapshot()` traverses the stage
-  (`UsdGeom.Mesh` → geometry + `displayColor` material, `UsdLux` lights,
+  (`UsdGeom.Mesh` → geometry with authored normals + UVs, bound
+  `UsdPreviewSurface` → PBR scalars + base/metallic‑roughness/normal/emissive/
+  occlusion textures (falling back to `displayColor`), `UsdLux` lights,
   `UsdGeom.Camera`) into a command buffer; `build_delta(paths)` emits
-  `SetTransform`/material updates for changed prims. `serve()` registers a
+  `SetTransform`/material‑scalar updates for changed prims (textures stream once
+  in the snapshot). `serve()` registers a
   `Usd.Notice.ObjectsChanged` listener, coalesces dirty prims, and broadcasts
   throttled deltas to connected clients.
 - **Coordinate systems** — USD is right-handed (default Y-up); Babylon is
@@ -79,7 +82,8 @@ Baked geometry + node transforms are written in glTF space (≈ Y-up USD space);
 Babylon's glTF loader converts on load, and the baked deltas are sent in the same
 (un-converted) space, so bound nodes and deltas stay in one frame.
 
-Deferred: UsdShade → PBR material/texture translation (currently `displayColor`
-only), UsdSkel/animation, instancing, camera orientation (the arc camera looks at
-the origin), and baking lights/cameras into the glTF.
+Deferred: UsdShade node‑graph shaders beyond `UsdPreviewSurface` (e.g. MaterialX,
+MDL), UsdSkel/animation, instancing, camera orientation (the arc camera looks at
+the origin), and baking normals/UVs/materials/lights/cameras into the glTF (the
+baker currently emits positions + `displayColor` only).
 

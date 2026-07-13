@@ -95,6 +95,39 @@ Commands: `UpsertNode`, `RemoveNode`, `SetTransform`, `UpsertMeshGeometry`,
   (`blp_protocol.py`, plus the Blender add‑on's `capture.py`); the single decoder
   in TypeScript (`SceneApplier`).
 
+## Producer capability matrix
+
+All four producers translate into the **same** protocol, so a scene looks the
+same in Babylon regardless of which host it came from. What each producer is able
+to *extract* from its host:
+
+| Feature | Blender | Maya | 3ds Max¹ | USD / Omniverse |
+|---|:--:|:--:|:--:|:--:|
+| Mesh positions + indices | ✅ | ✅ | ✅ | ✅ |
+| Normals | ✅ | ✅ | ✅ | ✅ authored² |
+| UVs | ✅ | ✅ | ✅ | ✅ |
+| PBR scalars (base/metallic/roughness/emissive) | ✅ | ✅ | ✅³ | ✅ |
+| Base‑color texture | ✅ | ✅ | ✅ | ✅ |
+| Metallic‑roughness texture (combined glTF ORM) | ✅ | ✅ | ✅ | ✅ |
+| Normal texture | ✅ | ✅ | ✅ | ✅ |
+| Emissive texture | ✅ | ✅ | ✅ | ✅ |
+| Occlusion texture | ✅ | — | — | ✅ |
+| Lights (directional / point, + hemispheric fill) | ✅ | ✅ | ✅ | ✅ |
+| Camera (arc‑rotate) | ✅ | ✅ | ✅ | ✅ |
+| Incremental deltas | ✅ | ✅ | ✅ | ✅ |
+
+¹ The Max producer is **SDK‑gated** — the code is complete but compiles only with
+the 3ds Max SDK installed (`-DMAX_SDK_ROOT=…`). It reads the Physical Material's
+`base_color`/`metalness`/`roughness`/`emit_color` params and the
+`*_map` texture slots (Normal Bump wrappers resolved to their bitmap).
+² USD emits authored normals (`normals` / `primvars:normals`); when a mesh has
+none, the `SceneApplier` computes them. All producers V‑flip UVs for Babylon's
+top‑left origin. The **combined metallic‑roughness** texture is emitted only when
+metalness and roughness are driven by the *same* image (the glTF ORM convention).
+³ Max derives roughness from glossiness for legacy Standard materials, and reads
+it directly from a Physical Material.
+
+
 ## Repository layout
 
 ```
@@ -193,10 +226,11 @@ node Plugins/Omniverse/web/client-check.mjs # headless end‑to‑end check (no 
 | C++ core (Babylon Native lifecycle, readback) | ✅ validated |
 | Scene protocol + C++/TS/Python encoders + TS decoder | ✅ validated |
 | Blender add‑on (live viewport, incremental capture, PBR textures, IBL) | ✅ working |
-| Shared C++ `SceneTranslator` + Maya plugin | ✅ builds + validated headlessly |
-| 3ds Max plugin | 🚧 SDK‑gated scaffold (compiles once the Max SDK is installed) |
+| Shared C++ `SceneTranslator` + Maya plugin (UVs + full PBR textures) | ✅ builds + validated headlessly |
+| 3ds Max plugin (full PBR textures) | 🚧 SDK‑gated (code complete; compiles once the Max SDK is installed) |
 | TypeScript client + WebSocket transport | ✅ validated (headless + browser) |
-| USD/Omniverse bridge + bake‑once glTF + path‑addressing | ✅ validated (headless + browser) |
+| USD/Omniverse bridge (normals, UVs, UsdPreviewSurface PBR + textures) | ✅ validated (headless + browser) |
+| Producer feature parity (see matrix above) | ✅ Blender / Maya / USD validated; Max blind |
 
 ## Coordinate systems
 

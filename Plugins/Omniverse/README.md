@@ -18,10 +18,11 @@ USD / Omniverse stage ──► usd-bridge (Python)  ──► WebSocket ──�
 ```
 Plan.md          the Live Sync architecture / vision spec (read this first)
 usd-bridge/      the server: USD/Omniverse → protocol → WebSocket (Python)
-  bridge.py        open a stage, snapshot + ObjectsChanged deltas, broadcast
+  bridge.py        open a stage, snapshot + ObjectsChanged deltas, broadcast;
+                   emits normals, UVs and UsdPreviewSurface PBR + textures
   gltf_export.py   minimal glTF baker for the "bake once, stream deltas" flow
-  sample.usda      a demo stage (cube + ground + light + camera)
-  test_bridge.py   pure unit test (snapshot / delta / baked)
+  sample.usda      a demo stage (PBR cube + ground + light + camera)
+  test_bridge.py   pure unit test (snapshot / delta / baked / normals+UVs+textures)
   verify.mjs       headless NullEngine client vs a live bridge
   README.md        details
 web/             the client: a Babylon.js page + a mock demo server + checks

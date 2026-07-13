@@ -26,10 +26,12 @@ Maya DAG                              babylonLivePreview.mll
 ```
 
 * **`MayaCapture.cpp`** — walks the DAG (`MItDag`): `MFnMesh` (points, vertex
-  normals, triangles), `standardSurface` (baseColor / metalness /
-  specularRoughness / emission) plus a connected `file` node for the base‑colour
-  texture, `MFnLight` (directional vs point), and the `persp` `MFnCamera`. It
-  fills the DCC‑agnostic POD structs and hands them to the shared
+  normals, per‑vertex UVs, triangles), `standardSurface` (baseColor / metalness /
+  specularRoughness / emission) plus connected `file` nodes for the base‑colour,
+  metallic‑roughness (combined glTF ORM when the same file drives metalness and
+  specularRoughness), normal (traced through `bump2d` / `aiNormalMap`) and
+  emissive channels, `MFnLight` (directional vs point), and the `persp`
+  `MFnCamera`. It fills the DCC‑agnostic POD structs and hands them to the shared
   `SceneTranslator`. Maya's `MMatrix` (row‑vector) is transposed into the
   translator's column‑major convention.
 * **`plugin.cpp`** — registers the `babylonLivePreview` command and drives the
@@ -106,8 +108,19 @@ interactive Render View display needs a running Maya to eyeball.
 
 ## Known follow‑ups
 
-- UsdShade‑style full material graphs (currently `standardSurface` core params +
-  a base‑colour file texture).
+- Per‑vertex UVs collapse Maya's per‑face‑vertex UVs to one value per control
+  vertex (seams take the last corner); per‑corner UV seams would need vertex
+  splitting.
+- Occlusion texture channel (base‑color / metallic‑roughness / normal / emissive
+  are captured).
 - True in‑viewport (VP2 / `MRenderOverride`) overlay instead of the Render View
   window.
 - DG/DAG change callbacks (currently a periodic incremental re‑sync).
+
+## Headless testing
+
+`Plugins/Maya/tests/mayapy_snapshot.py` renders a lit BMP and, via the
+`babylonLivePreview -dumpbuffer <path>` diagnostic flag, decodes the raw protocol
+buffer to assert UVs + every PBR texture channel are emitted. Run with
+`mayapy.exe` (it preloads the `.mll` via `ctypes` first so its bundled deps
+resolve).
