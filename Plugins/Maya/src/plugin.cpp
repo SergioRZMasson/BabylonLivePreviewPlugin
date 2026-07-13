@@ -4,6 +4,7 @@
 // Registers the `babylonLivePreview` MPxCommand. Flags:
 //   -start / -stop            : create/destroy a persistent live-preview session
 //   -snapshot <filepath>      : capture the scene, render one frame, write a BMP
+//   -dumpbuffer <filepath>    : capture the scene, write the raw protocol buffer
 //   -width <n> / -height <n>  : render resolution (default 1280x720)
 //   -status                   : print whether a session is live
 //
@@ -218,6 +219,7 @@ namespace
             s.addFlag("-e", "-stop");
             s.addFlag("-st", "-status");
             s.addFlag("-snp", "-snapshot", MSyntax::kString);
+            s.addFlag("-db", "-dumpbuffer", MSyntax::kString);
             s.addFlag("-w", "-width", MSyntax::kUnsigned);
             s.addFlag("-h", "-height", MSyntax::kUnsigned);
             return s;
@@ -251,6 +253,13 @@ namespace
                 MString path;
                 db.getFlagArgument("-snp", 0, path);
                 return Snapshot(path.asChar());
+            }
+
+            if (db.isFlagSet("-db"))
+            {
+                MString path;
+                db.getFlagArgument("-db", 0, path);
+                return DumpBuffer(path.asChar());
             }
 
             if (db.isFlagSet("-s"))
@@ -298,6 +307,25 @@ namespace
             StopRenderView();
             g_state.translator.reset();
             g_state.session.reset();
+        }
+
+        // Diagnostic: capture the scene into a protocol buffer and write it to
+        // disk WITHOUT booting a Babylon session. Lets headless tests decode the
+        // exact bytes (geometry streams, texture channels) the producer emits.
+        MStatus DumpBuffer(const std::string& path)
+        {
+            SceneTranslator tr(CoordinateBasis::YUpRightHanded());
+            std::vector<uint8_t> buf =
+                MayaPlugin::CaptureScene(tr, g_state.width, g_state.height, false);
+            std::ofstream f(path, std::ios::binary);
+            if (!f)
+            {
+                displayError(MString("BabylonLivePreview: cannot write ") + path.c_str());
+                return MS::kFailure;
+            }
+            f.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+            MGlobal::displayInfo(MString("BabylonLivePreview: dumped ") + path.c_str());
+            return MS::kSuccess;
         }
 
         MStatus Snapshot(const std::string& path)

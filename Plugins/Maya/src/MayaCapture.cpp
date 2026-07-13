@@ -13,6 +13,7 @@
 #include <maya/MFnMesh.h>
 #include <maya/MIntArray.h>
 #include <maya/MItDag.h>
+#include <maya/MItMeshPolygon.h>
 #include <maya/MMatrix.h>
 #include <maya/MObjectArray.h>
 #include <maya/MPlug.h>
@@ -56,20 +57,12 @@ namespace BabylonLivePreview::MayaPlugin
             return true;
         }
 
-        // Follow a (possibly connected) plug to a "file" node and read the
-        // referenced image file's bytes. Mirrors capture.py's file-texture path.
-        bool ReadConnectedFileTexture(const MFnDependencyNode& matFn, const char* attr,
-            std::vector<uint8_t>& outBytes, uint64_t& outId)
+        // Read the encoded image bytes referenced by a Maya `file` node.
+        bool ReadFileNodeBytes(const MObject& fileNode, std::vector<uint8_t>& outBytes, uint64_t& outId)
         {
+            if (fileNode.isNull() || !fileNode.hasFn(MFn::kFileTexture)) return false;
             MStatus st;
-            MPlug plug = matFn.findPlug(attr, true, &st);
-            if (!st || plug.isNull()) return false;
-            MPlugArray src;
-            plug.connectedTo(src, true, false, &st);
-            if (!st || src.length() == 0) return false;
-            MObject node = src[0].node();
-            if (!node.hasFn(MFn::kFileTexture)) return false;
-            MFnDependencyNode fileFn(node);
+            MFnDependencyNode fileFn(fileNode);
             MPlug namePlug = fileFn.findPlug("fileTextureName", true, &st);
             if (!st || namePlug.isNull()) return false;
             MString path = namePlug.asString();
@@ -82,6 +75,55 @@ namespace BabylonLivePreview::MayaPlugin
             for (const char* c = path.asChar(); *c; ++c) { h ^= static_cast<uint8_t>(*c); h *= 1099511628211ull; }
             outId = h ^ outBytes.size();
             return true;
+        }
+
+        // The upstream source node driving `attr` on `fn` (or null if unconnected).
+        MObject ConnectedSourceNode(const MFnDependencyNode& fn, const char* attr)
+        {
+            MStatus st;
+            MPlug plug = fn.findPlug(attr, true, &st);
+            if (!st || plug.isNull()) return MObject::kNullObj;
+            MPlugArray src;
+            plug.connectedTo(src, true, false, &st);
+            if (!st || src.length() == 0) return MObject::kNullObj;
+            return src[0].node();
+        }
+
+        // The `fileTextureName` of a Maya `file` node (empty if not a file node).
+        std::string FileNodePath(const MObject& fileNode)
+        {
+            if (fileNode.isNull() || !fileNode.hasFn(MFn::kFileTexture)) return {};
+            MStatus st;
+            MFnDependencyNode fileFn(fileNode);
+            MPlug namePlug = fileFn.findPlug("fileTextureName", true, &st);
+            if (!st || namePlug.isNull()) return {};
+            return namePlug.asString().asChar();
+        }
+
+        // Follow a (possibly connected) plug to a `file` node and read its bytes.
+        // Mirrors capture.py's file-texture path.
+        bool ReadConnectedFileTexture(const MFnDependencyNode& matFn, const char* attr,
+            std::vector<uint8_t>& outBytes, uint64_t& outId)
+        {
+            return ReadFileNodeBytes(ConnectedSourceNode(matFn, attr), outBytes, outId);
+        }
+
+        // Normal maps reach `normalCamera` through a bump2d / aiNormalMap node;
+        // trace one level of indirection to the underlying `file` node.
+        bool ReadNormalTexture(const MFnDependencyNode& matFn,
+            std::vector<uint8_t>& outBytes, uint64_t& outId)
+        {
+            MObject node = ConnectedSourceNode(matFn, "normalCamera");
+            if (node.isNull()) return false;
+            if (node.hasFn(MFn::kFileTexture)) return ReadFileNodeBytes(node, outBytes, outId);
+            MFnDependencyNode bumpFn(node);
+            for (const char* a : {"bumpValue", "input", "normalMap", "inColor", "bumpNormal"})
+            {
+                MObject f = ConnectedSourceNode(bumpFn, a);
+                if (!f.isNull() && f.hasFn(MFn::kFileTexture))
+                    return ReadFileNodeBytes(f, outBytes, outId);
+            }
+            return false;
         }
 
         void ExtractMaterial(const MFnMesh& meshFn, MaterialData& mat)
@@ -132,6 +174,52 @@ namespace BabylonLivePreview::MayaPlugin
                 // A base texture multiplies baseColor; use white so it isn't tinted.
                 mat.baseColor[0] = mat.baseColor[1] = mat.baseColor[2] = 1.0f;
             }
+
+            // Metallic-roughness: glTF packs metal (B) + rough (G) in one image.
+            // Emit the combined channel only when metalness and specularRoughness
+            // are driven by the SAME file node (mirrors Blender's ORM detection).
+            {
+                MObject metalNode = ConnectedSourceNode(matFn, "metalness");
+                MObject roughNode = ConnectedSourceNode(matFn, "specularRoughness");
+                std::string metalPath = FileNodePath(metalNode);
+                std::string roughPath = FileNodePath(roughNode);
+                std::vector<uint8_t> mrBytes;
+                uint64_t mrId = 0;
+                if (!roughPath.empty() && roughPath == metalPath &&
+                    ReadFileNodeBytes(roughNode, mrBytes, mrId))
+                {
+                    const size_t ch = static_cast<size_t>(TexChannel::MetallicRoughness);
+                    mat.textures[ch] = std::move(mrBytes);
+                    mat.textureIds[ch] = mrId;
+                }
+            }
+
+            // Normal map (via bump2d / aiNormalMap on normalCamera).
+            {
+                std::vector<uint8_t> nBytes;
+                uint64_t nId = 0;
+                if (ReadNormalTexture(matFn, nBytes, nId))
+                {
+                    const size_t ch = static_cast<size_t>(TexChannel::Normal);
+                    mat.textures[ch] = std::move(nBytes);
+                    mat.textureIds[ch] = nId;
+                }
+            }
+
+            // Emissive texture (standardSurface emissionColor / lambert incandescence).
+            {
+                std::vector<uint8_t> eBytes;
+                uint64_t eId = 0;
+                if (ReadConnectedFileTexture(matFn, "emissionColor", eBytes, eId) ||
+                    ReadConnectedFileTexture(matFn, "incandescence", eBytes, eId))
+                {
+                    const size_t ch = static_cast<size_t>(TexChannel::Emissive);
+                    mat.textures[ch] = std::move(eBytes);
+                    mat.textureIds[ch] = eId;
+                    if (mat.emissiveStrength <= 0.0f) mat.emissiveStrength = 1.0f;
+                    mat.emissive[0] = mat.emissive[1] = mat.emissive[2] = 1.0f;
+                }
+            }
         }
 
         void CaptureMesh(SceneTranslator& tr, CommandEncoder& enc, const MDagPath& path)
@@ -167,6 +255,31 @@ namespace BabylonLivePreview::MayaPlugin
                     mesh.normals[i * 3 + 1] = norms[i].y;
                     mesh.normals[i * 3 + 2] = norms[i].z;
                 }
+            }
+
+            // Per-vertex UVs (positions are vertex-indexed, so collapse Maya's
+            // per-face-vertex UVs to one value per control vertex; seams take the
+            // last-written corner). V is flipped for Babylon's top-left origin.
+            if (meshFn.numUVs() > 0)
+            {
+                mesh.uvs.assign(pts.length() * 2, 0.0f);
+                bool anyUV = false;
+                for (MItMeshPolygon polyIt(path); !polyIt.isDone(); polyIt.next())
+                {
+                    if (!polyIt.hasUVs()) continue;
+                    const unsigned vc = polyIt.polygonVertexCount();
+                    for (unsigned k = 0; k < vc; ++k)
+                    {
+                        float2 uv;
+                        if (!polyIt.getUV(k, uv)) continue;
+                        const int vId = polyIt.vertexIndex(k);
+                        if (vId < 0 || static_cast<unsigned>(vId) >= pts.length()) continue;
+                        mesh.uvs[vId * 2] = uv[0];
+                        mesh.uvs[vId * 2 + 1] = 1.0f - uv[1];
+                        anyUV = true;
+                    }
+                }
+                if (!anyUV) mesh.uvs.clear();
             }
             mesh.indices.resize(triVerts.length());
             for (unsigned i = 0; i < triVerts.length(); ++i)
