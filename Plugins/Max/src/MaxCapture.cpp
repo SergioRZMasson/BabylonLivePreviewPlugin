@@ -65,13 +65,133 @@ namespace BabylonLivePreview::MaxPlugin
             return !out.empty();
         }
 
-        // Extract a Max material into MaterialData. Uses the generic Mtl color +
-        // a diffuse BitmapTex file for the base-colour channel. Physical-material
-        // metalness/roughness param access is left as a TODO.
+        // Compare a Max internal (int_name) param name to an ASCII literal. Param
+        // internal names are always ASCII, so this works whether MCHAR is char or
+        // wchar_t — avoiding tchar/_T portability concerns.
+        bool NameEq(const MCHAR* a, const char* b)
+        {
+            if (!a) return false;
+            for (; *a && *b; ++a, ++b)
+                if (static_cast<char>(*a) != *b) return false;
+            return *a == 0 && *b == 0;
+        }
+
+        // Descend a texmap tree to the first BitmapTex (handles wrappers like
+        // Normal Bump, Color Correction, gamma/gain nodes).
+        BitmapTex* ResolveBitmap(Texmap* tex, int depth = 0)
+        {
+            if (!tex || depth > 4) return nullptr;
+            if (tex->ClassID() == Class_ID(BMTEX_CLASS_ID, 0))
+                return static_cast<BitmapTex*>(tex);
+            for (int i = 0; i < tex->NumSubTexmaps(); ++i)
+            {
+                if (BitmapTex* b = ResolveBitmap(tex->GetSubTexmap(i), depth + 1))
+                    return b;
+            }
+            return nullptr;
+        }
+
+        // Look up a TYPE_TEXMAP parameter by its internal name across all of a
+        // material's parameter blocks (Physical Material, etc.).
+        Texmap* FindTexmapByName(Mtl* mtl, const char* name)
+        {
+            for (int i = 0; i < mtl->NumParamBlocks(); ++i)
+            {
+                IParamBlock2* pb = mtl->GetParamBlock(i);
+                if (!pb) continue;
+                ParamBlockDesc2* d = pb->GetDesc();
+                if (!d) continue;
+                for (int p = 0; p < d->count; ++p)
+                {
+                    const ParamDef& def = d->paramdefs[p];
+                    if (def.type == TYPE_TEXMAP && NameEq(def.int_name, name))
+                        return pb->GetTexmap(def.ID, 0);
+                }
+            }
+            return nullptr;
+        }
+
+        bool FindFloatByName(Mtl* mtl, const char* name, TimeValue t, float& out)
+        {
+            for (int i = 0; i < mtl->NumParamBlocks(); ++i)
+            {
+                IParamBlock2* pb = mtl->GetParamBlock(i);
+                if (!pb) continue;
+                ParamBlockDesc2* d = pb->GetDesc();
+                if (!d) continue;
+                for (int p = 0; p < d->count; ++p)
+                {
+                    const ParamDef& def = d->paramdefs[p];
+                    if (!NameEq(def.int_name, name)) continue;
+                    if (def.type == TYPE_FLOAT || def.type == TYPE_PCNT_FRAC || def.type == TYPE_WORLD)
+                    {
+                        out = pb->GetFloat(def.ID, t);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        bool FindColorByName(Mtl* mtl, const char* name, TimeValue t, Color& out)
+        {
+            for (int i = 0; i < mtl->NumParamBlocks(); ++i)
+            {
+                IParamBlock2* pb = mtl->GetParamBlock(i);
+                if (!pb) continue;
+                ParamBlockDesc2* d = pb->GetDesc();
+                if (!d) continue;
+                for (int p = 0; p < d->count; ++p)
+                {
+                    const ParamDef& def = d->paramdefs[p];
+                    if (!NameEq(def.int_name, name)) continue;
+                    if (def.type == TYPE_RGBA) { out = pb->GetColor(def.ID, t); return true; }
+                    if (def.type == TYPE_FRGBA)
+                    {
+                        const AColor ac = pb->GetAColor(def.ID, t);
+                        out = Color(ac.r, ac.g, ac.b);
+                        return true;
+                    }
+                    if (def.type == TYPE_POINT3)
+                    {
+                        const Point3 pt = pb->GetPoint3(def.ID, t);
+                        out = Color(pt.x, pt.y, pt.z);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        std::string BitmapPath(Texmap* tex)
+        {
+            BitmapTex* b = ResolveBitmap(tex);
+            return b ? WideToUtf8(b->GetMapName()) : std::string{};
+        }
+
+        // Read the bitmap referenced by `tex` into `channel`; returns true on success.
+        bool EmitBitmap(Texmap* tex, MaterialData& mat, TexChannel channel)
+        {
+            BitmapTex* bmt = ResolveBitmap(tex);
+            if (!bmt) return false;
+            std::vector<uint8_t> bytes;
+            if (!ReadFileBytes(bmt->GetMapName(), bytes)) return false;
+            const size_t ch = static_cast<size_t>(channel);
+            mat.textureIds[ch] = std::hash<std::string>{}(WideToUtf8(bmt->GetMapName())) ^ bytes.size();
+            mat.textures[ch] = std::move(bytes);
+            return true;
+        }
+
+        // Extract a Max material into MaterialData. A generic baseline (Standard
+        // material colours + diffuse/bump/self-illum submaps) is refined with
+        // Physical Material parameters + PBR map slots when present. Base-colour,
+        // metallic-roughness (combined glTF ORM), normal and emissive texture
+        // channels all flow through — parity with Blender/Maya/USD.
         void ExtractMaterial(Mtl* mtl, TimeValue t, MaterialData& mat)
         {
             if (!mtl) return;
 
+            // --- generic baseline (Standard material and similar) ---
             const Color diff = mtl->GetDiffuse(0);
             mat.baseColor[0] = diff.r;
             mat.baseColor[1] = diff.g;
@@ -84,19 +204,59 @@ namespace BabylonLivePreview::MaxPlugin
             mat.emissive[0] = self.r; mat.emissive[1] = self.g; mat.emissive[2] = self.b;
             if (self.r + self.g + self.b > 0.0f) mat.emissiveStrength = 1.0f;
 
-            // Diffuse map -> base-colour texture.
-            Texmap* tex = mtl->GetSubTexmap(ID_DI);
-            if (tex && tex->ClassID() == Class_ID(BMTEX_CLASS_ID, 0))
+            // --- Physical Material scalars (override baseline when present) ---
+            Color c;
+            if (FindColorByName(mtl, "base_color", t, c))
             {
-                BitmapTex* bmt = static_cast<BitmapTex*>(tex);
-                std::vector<uint8_t> bytes;
-                if (ReadFileBytes(bmt->GetMapName(), bytes))
-                {
-                    const size_t ch = static_cast<size_t>(TexChannel::BaseColor);
-                    mat.textureIds[ch] = std::hash<std::string>{}(WideToUtf8(bmt->GetMapName())) ^ bytes.size();
-                    mat.textures[ch] = std::move(bytes);
-                    mat.baseColor[0] = mat.baseColor[1] = mat.baseColor[2] = 1.0f;
-                }
+                mat.baseColor[0] = c.r; mat.baseColor[1] = c.g; mat.baseColor[2] = c.b;
+            }
+            float f;
+            if (FindFloatByName(mtl, "metalness", t, f)) mat.metallic = f;
+            if (FindFloatByName(mtl, "roughness", t, f)) mat.roughness = f;
+            Color e;
+            if (FindColorByName(mtl, "emit_color", t, e))
+            {
+                mat.emissive[0] = e.r; mat.emissive[1] = e.g; mat.emissive[2] = e.b;
+                float lum = 1.0f;
+                FindFloatByName(mtl, "emission", t, lum);
+                mat.emissiveStrength = lum;
+            }
+
+            // --- textures ---
+            // Base colour: Physical Material base_color_map else Standard diffuse submap.
+            Texmap* baseTex = FindTexmapByName(mtl, "base_color_map");
+            if (!baseTex) baseTex = mtl->GetSubTexmap(ID_DI);
+            if (EmitBitmap(baseTex, mat, TexChannel::BaseColor))
+            {
+                // A base texture multiplies baseColor; use white so it isn't tinted.
+                mat.baseColor[0] = mat.baseColor[1] = mat.baseColor[2] = 1.0f;
+            }
+
+            // Metallic-roughness: glTF packs metal (B) + rough (G) in one image;
+            // emit the combined channel only when metalness_map and roughness_map
+            // reference the SAME bitmap (mirrors Blender/Maya ORM detection).
+            Texmap* metalTex = FindTexmapByName(mtl, "metalness_map");
+            Texmap* roughTex = FindTexmapByName(mtl, "roughness_map");
+            const std::string metalPath = BitmapPath(metalTex);
+            const std::string roughPath = BitmapPath(roughTex);
+            if (!roughPath.empty() && roughPath == metalPath)
+            {
+                EmitBitmap(roughTex, mat, TexChannel::MetallicRoughness);
+            }
+
+            // Normal: Physical Material bump_map (resolve through Normal Bump wrapper)
+            // else Standard bump submap.
+            Texmap* bumpTex = FindTexmapByName(mtl, "bump_map");
+            if (!bumpTex) bumpTex = mtl->GetSubTexmap(ID_BU);
+            EmitBitmap(bumpTex, mat, TexChannel::Normal);
+
+            // Emissive: Physical Material emit_color_map else Standard self-illum submap.
+            Texmap* emitTex = FindTexmapByName(mtl, "emit_color_map");
+            if (!emitTex) emitTex = mtl->GetSubTexmap(ID_SI);
+            if (EmitBitmap(emitTex, mat, TexChannel::Emissive))
+            {
+                if (mat.emissiveStrength <= 0.0f) mat.emissiveStrength = 1.0f;
+                mat.emissive[0] = mat.emissive[1] = mat.emissive[2] = 1.0f;
             }
         }
 
