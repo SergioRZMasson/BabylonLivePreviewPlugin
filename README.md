@@ -46,7 +46,7 @@ source, and your scene is kept live — no per‑host scene code.
         PRODUCERS (translate a host scene graph → protocol)
    ┌───────────────────────────┬──────────────────────────────┐
    │  DCC plugins (C++)         │  USD / Omniverse bridge (Py)  │
-   │  Blender · Maya · 3ds Max  │  Servers/usd-bridge           │
+   │  Blender · Maya · 3ds Max  │  Plugins/Omniverse/usd-bridge  │
    │  → SceneTranslation (C++)  │  → blp_protocol.py            │
    └─────────────┬─────────────┴───────────────┬──────────────┘
                  │      binary scene‑delta buffers (one wire format)
@@ -107,8 +107,10 @@ Clients/ts/             @babylonjs/live-sync — the TypeScript decoder + transp
 Plugins/Blender/        Blender add‑on + C‑API DLL          → Plugins/Blender/README.md
 Plugins/Maya/           Maya .mll plugin                    → Plugins/Maya/README.md
 Plugins/Max/            3ds Max .dlu plugin (SDK‑gated)     → Plugins/Max/README.md
-Plugins/Omniverse/      Live Sync architecture spec (Plan.md)
-Servers/usd-bridge/     USD / Omniverse → WebSocket bridge  → Servers/usd-bridge/README.md
+Plugins/Omniverse/      the remote WebSocket scenario     → Plugins/Omniverse/README.md
+  usd-bridge/           USD / Omniverse → protocol server (Python)
+  web/                  browser client + demo ws server + headless checks
+  Plan.md               Live Sync architecture spec
 Tests/                  headless C++ tests (protocol, translator, render)
 cmake/                  build helpers (script staging, per‑DCC JS bundling)
 Dependencies/           Babylon Native (git submodule)
@@ -128,9 +130,9 @@ Dependencies/           Babylon Native (git submodule)
   WebSocket/native transports + the browser `BabylonLiveSync` API. It is also the
   **source of truth** for each DCC plugin's bundled `live_preview.js` (built
   per‑DCC at compile time; see `cmake/BlpHelpers.cmake`).
-* **USD bridge** (`Servers/usd-bridge/`) — opens a USD/Omniverse stage, translates
-  it, and broadcasts deltas over WebSocket, with `ObjectsChanged` → incremental
-  updates and an optional bake‑once glTF flow.
+* **USD bridge** (`Plugins/Omniverse/usd-bridge/`) — opens a USD/Omniverse stage,
+  translates it, and broadcasts deltas over WebSocket, with `ObjectsChanged` →
+  incremental updates and an optional bake‑once glTF flow.
 
 ## Prerequisites
 
@@ -176,13 +178,13 @@ README — [Blender](Plugins/Blender/README.md) · [Maya](Plugins/Maya/README.md
 **Browser (WebSocket):** stream a mock scene into a Babylon page —
 
 ```powershell
-node Clients/ts/build.mjs --web          # build the browser bundles
-node Clients/ts/demo/server.mjs          # http + ws on http://localhost:8080
+node Clients/ts/build.mjs --web             # build the browser bundles
+node Plugins/Omniverse/web/server.mjs       # http + ws on http://localhost:8080
 #   open http://localhost:8080
-node Clients/ts/demo/client-check.mjs    # headless end‑to‑end check (no browser)
+node Plugins/Omniverse/web/client-check.mjs # headless end‑to‑end check (no browser)
 ```
 
-**USD / Omniverse → browser:** see [Servers/usd-bridge/README.md](Servers/usd-bridge/README.md).
+**USD / Omniverse → browser:** see [Plugins/Omniverse/README.md](Plugins/Omniverse/README.md).
 
 ## Status
 
@@ -209,5 +211,5 @@ node Clients/ts/demo/client-check.mjs    # headless end‑to‑end check (no bro
 
 - **Architecture / vision spec** — [Plugins/Omniverse/Plan.md](Plugins/Omniverse/Plan.md)
 - **TypeScript client** — [Clients/ts/README.md](Clients/ts/README.md)
-- **USD / Omniverse bridge** — [Servers/usd-bridge/README.md](Servers/usd-bridge/README.md)
+- **USD / Omniverse (server + web client)** — [Plugins/Omniverse/README.md](Plugins/Omniverse/README.md)
 - Per‑plugin docs are linked in the layout table above.

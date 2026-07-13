@@ -2,7 +2,7 @@
 
 Pure (no WebSocket): decodes the emitted command buffers and asserts the scene
 and a transform delta. Run:
-    python Servers/usd-bridge/test_bridge.py
+    python Plugins/Omniverse/usd-bridge/test_bridge.py
 """
 
 import os
@@ -13,7 +13,7 @@ from pxr import Usd, UsdGeom
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-sys.path.insert(0, os.path.join(_HERE, "..", "..", "Shared", "python"))
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "..", "Shared", "python"))
 
 import bridge as bridgemod  # noqa: E402
 import blp_protocol as blp  # noqa: E402

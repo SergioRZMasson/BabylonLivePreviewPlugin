@@ -13,9 +13,7 @@
   "scripts": {
     "build": "node build.mjs --web",
     "build:native": "node build.mjs --entry native",
-    "typecheck": "tsc --noEmit",
-    "demo": "node demo/server.mjs",
-    "demo:check": "node demo/client-check.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "babylonjs": ">=9.0.0"

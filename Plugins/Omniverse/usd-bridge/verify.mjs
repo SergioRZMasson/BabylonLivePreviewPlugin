@@ -4,10 +4,10 @@
 // Connects a headless Babylon NullEngine scene to a running USD bridge via
 // BabylonLiveSync and asserts the USD stage was translated into a live scene.
 //
-//   python Servers/usd-bridge/bridge.py --stage Servers/usd-bridge/sample.usda --port 8765 &
-//   node Servers/usd-bridge/verify.mjs 8765
+//   python Plugins/Omniverse/usd-bridge/bridge.py --stage Plugins/Omniverse/usd-bridge/sample.usda --port 8765 &
+//   node Plugins/Omniverse/usd-bridge/verify.mjs 8765
 import { createRequire } from "node:module";
-import { BabylonLiveSync } from "../../Clients/ts/dist/babylon-live-sync.esm.js";
+import { BabylonLiveSync } from "../../../Clients/ts/dist/babylon-live-sync.esm.js";
 
 const require = createRequire(import.meta.url);
 const BABYLON = require("babylonjs");

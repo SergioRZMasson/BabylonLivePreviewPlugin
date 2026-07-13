@@ -5,11 +5,11 @@
 // the same deltas as the demo, then drives a headless Babylon NullEngine scene
 // through BabylonLiveSync and asserts the scene was built and is animating.
 //
-//   node Clients/ts/demo/client-check.mjs
+//   node Plugins/Omniverse/web/client-check.mjs
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
 import { initialSnapshot, animationFrame } from "./deltas.mjs";
-import { BabylonLiveSync } from "../dist/babylon-live-sync.esm.js";
+import { BabylonLiveSync } from "../../../Clients/ts/dist/babylon-live-sync.esm.js";
 
 const require = createRequire(import.meta.url);
 const BABYLON = require("babylonjs");

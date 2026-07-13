@@ -5,13 +5,13 @@
 // it by path and drives it with id-addressed deltas — the "bake once, update
 // often" flow, without needing a real glTF loader in Node.
 //
-//   node Clients/ts/demo/bind-check.mjs
+//   node Plugins/Omniverse/web/bind-check.mjs
 import { createRequire } from "node:module";
 import {
     SceneApplier,
     CommandWriter,
     NodeKind,
-} from "../dist/babylon-live-sync.esm.js";
+} from "../../../Clients/ts/dist/babylon-live-sync.esm.js";
 
 const require = createRequire(import.meta.url);
 const BABYLON = require("babylonjs");

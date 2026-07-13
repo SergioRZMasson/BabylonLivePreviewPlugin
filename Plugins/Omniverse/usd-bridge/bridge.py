@@ -27,7 +27,7 @@ import threading
 
 from pxr import Gf, Tf, Usd, UsdGeom, UsdLux
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "Shared", "python"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "Shared", "python"))
 import blp_protocol as blp  # noqa: E402
 
 

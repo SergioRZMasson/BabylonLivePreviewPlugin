@@ -80,22 +80,23 @@ baked glTF and deltas are addressed to those nodes. See
 
 ## Demo (WebSocket, end to end)
 
-A mock producer that streams scene-delta buffers to a Babylon.js page — no
-page-specific scene code, everything (camera, lights, meshes, animation) arrives
-over the socket.
+The WebSocket client/server demo lives with the Omniverse scenario, in
+[`Plugins/Omniverse/web`](../../Plugins/Omniverse/web). It streams scene-delta
+buffers to a Babylon.js page — no page-specific scene code; everything (camera,
+lights, meshes, animation) arrives over the socket.
 
 ```powershell
-npm install                      # once, at the repo root
-node Clients/ts/build.mjs --web  # build the UMD/ESM bundles
-node Clients/ts/demo/server.mjs  # http + ws on http://localhost:8080
+npm install                              # once, at the repo root
+node Clients/ts/build.mjs --web          # build the UMD/ESM bundles
+node Plugins/Omniverse/web/server.mjs    # http + ws on http://localhost:8080
 # open http://localhost:8080 in a browser
 
 # headless end-to-end check (NullEngine client + ws server, no browser):
-node Clients/ts/demo/client-check.mjs
+node Plugins/Omniverse/web/client-check.mjs
 ```
 
-`demo/deltas.mjs` builds the buffers with the TS `CommandWriter` — the same
-encoder a real producer (USD/Omniverse bridge) uses.
+`Plugins/Omniverse/web/deltas.mjs` builds the buffers with the TS `CommandWriter`
+— the same encoder a real producer (the USD/Omniverse bridge) uses.
 
 ## Protocol
 

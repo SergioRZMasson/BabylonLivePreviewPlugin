@@ -5,7 +5,7 @@
 // a Babylon.js page updates live with no page-specific scene code. Stands in for
 // a real producer (e.g. a USD/Omniverse bridge).
 //
-//   node Clients/ts/demo/server.mjs [--port 8080]
+//   node Plugins/Omniverse/web/server.mjs [--port 8080]
 //   -> open http://localhost:8080
 import http from "node:http";
 import { readFile } from "node:fs/promises";
@@ -27,7 +27,7 @@ const STATIC = {
     "/index.html": { path: resolve(here, "index.html"), type: "text/html" },
     "/babylon.js": { path: resolve(repoRoot, "node_modules/babylonjs/babylon.js"), type: "text/javascript" },
     "/babylonjs.loaders.js": { path: resolve(repoRoot, "node_modules/babylonjs-loaders/babylonjs.loaders.min.js"), type: "text/javascript" },
-    "/babylon-live-sync.umd.js": { path: resolve(here, "..", "dist/babylon-live-sync.umd.js"), type: "text/javascript" },
+    "/babylon-live-sync.umd.js": { path: resolve(repoRoot, "Clients/ts/dist/babylon-live-sync.umd.js"), type: "text/javascript" },
     "/baked.gltf": { path: resolve(here, "baked.gltf"), type: "model/gltf+json" },
 };
 

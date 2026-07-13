@@ -8,7 +8,7 @@ import {
     CommandWriter,
     NodeKind,
     LightType,
-} from "../dist/babylon-live-sync.esm.js";
+} from "../../../Clients/ts/dist/babylon-live-sync.esm.js";
 
 const GROUND_ID = 1;
 const BOX_ID = 2;

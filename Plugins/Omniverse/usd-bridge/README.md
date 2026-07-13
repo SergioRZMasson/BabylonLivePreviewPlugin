@@ -25,13 +25,13 @@ USD stage (local .usd/.usda, or omniverse://…)
 node Clients/ts/build.mjs --web
 
 # 2. Start the bridge on a USD stage:
-python Servers/usd-bridge/bridge.py --stage Servers/usd-bridge/sample.usda --port 8765
+python Plugins/Omniverse/usd-bridge/bridge.py --stage Plugins/Omniverse/usd-bridge/sample.usda --port 8765
 
 # 3a. Headless check (no browser): a NullEngine client builds the scene:
-node Servers/usd-bridge/verify.mjs 8765
+node Plugins/Omniverse/usd-bridge/verify.mjs 8765
 
 # 3b. Browser: serve the demo page and point it at the bridge:
-node Clients/ts/demo/server.mjs --port 8080
+node Plugins/Omniverse/web/server.mjs --port 8080
 #     open  http://localhost:8080/?ws=ws://localhost:8765
 ```
 
@@ -51,7 +51,7 @@ the Babylon scene updates within a frame.
   maps translation `(tx,ty,-tz)` and quaternion `(qx,qy,qz,qw)→(-qx,-qy,qz,qw)`.
   Z-up stages use `(x,z,-y)`. Materials are double-sided, so winding under the
   reflection is not a visual concern.
-- **Encoder** — reuses `Shared/python/blp_protocol.py`, the shared Python
+- **Encoder** — reuses `../../../Shared/python/blp_protocol.py`, the shared Python
   `CommandEncoder` (byte-identical to the C++/TS/Blender encoders).
 
 ## Current scope & follow-ups
@@ -69,9 +69,9 @@ Two flows are supported:
 
 ```powershell
 # bake, then serve baked + self-animate for a demo:
-python Servers/usd-bridge/bridge.py --stage Servers/usd-bridge/sample.usda --bake Clients/ts/demo/baked.gltf
-python Servers/usd-bridge/bridge.py --stage Servers/usd-bridge/sample.usda --port 8765 --baked --animate
-node Clients/ts/demo/server.mjs --port 8080
+python Plugins/Omniverse/usd-bridge/bridge.py --stage Plugins/Omniverse/usd-bridge/sample.usda --bake Plugins/Omniverse/web/baked.gltf
+python Plugins/Omniverse/usd-bridge/bridge.py --stage Plugins/Omniverse/usd-bridge/sample.usda --port 8765 --baked --animate
+node Plugins/Omniverse/web/server.mjs --port 8080
 #   open  http://localhost:8080/?ws=ws://localhost:8765&gltf=/baked.gltf
 ```
 
