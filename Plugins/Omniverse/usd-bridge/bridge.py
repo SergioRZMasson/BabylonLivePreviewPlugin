@@ -25,7 +25,7 @@ import os
 import sys
 import threading
 
-from pxr import Gf, Tf, Usd, UsdGeom, UsdLux
+from pxr import Gf, Sdf, Tf, Usd, UsdGeom, UsdLux, UsdShade
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "Shared", "python"))
 import blp_protocol as blp  # noqa: E402
@@ -41,6 +41,11 @@ def _point_yup(x, y, z):
 
 def _point_zup(x, y, z):
     return (x, z, -y)
+
+
+def _is_vec(v):
+    """True for a Gf.Vec*/tuple-like colour value (not a scalar or None)."""
+    return v is not None and hasattr(v, "__len__") and len(v) >= 3
 
 
 class UsdBridge:
@@ -93,36 +98,113 @@ class UsdBridge:
         n = math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) or 1.0
         return (d[0] / n, d[1] / n, d[2] / n)
 
-    # --- emitters --------------------------------------------------------
-    def _emit_mesh(self, enc, prim, upsert_node=True):
+    # --- geometry --------------------------------------------------------
+    def _mesh_arrays(self, prim):
+        """Flatten a UsdGeom.Mesh into Babylon-space (positions, normals, uvs,
+        indices). Authored normals (schema ``normals`` or ``primvars:normals``)
+        and UVs (``primvars:st`` and common aliases) are honoured, respecting
+        their interpolation (vertex/varying/faceVarying/uniform/constant). When
+        any attribute is faceVarying (or uniform), geometry is expanded per
+        face-corner so all streams stay index-aligned; otherwise the compact
+        per-point form is used. Returns None if the mesh has no drawable data."""
         mesh = UsdGeom.Mesh(prim)
         pts = mesh.GetPointsAttr().Get()
         counts = mesh.GetFaceVertexCountsAttr().Get()
         idx = mesh.GetFaceVertexIndicesAttr().Get()
         if not pts or not counts or not idx:
+            return None
+
+        normals, n_interp = self._mesh_normals(prim, mesh)
+        st_vals, st_interp = self._mesh_uvs(prim)
+
+        fv = UsdGeom.Tokens.faceVarying
+        uni = UsdGeom.Tokens.uniform
+        expand = n_interp in (fv, uni) or st_interp in (fv, uni)
+
+        def sample(vals, interp, corner, point, face):
+            if interp == fv:
+                return vals[corner]
+            if interp == uni:
+                return vals[face]
+            if interp == UsdGeom.Tokens.constant:
+                return vals[0]
+            return vals[point]  # vertex / varying
+
+        positions, out_norms, out_uvs, indices = [], [], [], []
+
+        if not expand:
+            for p in pts:
+                bp = self._point(p[0], p[1], p[2])
+                positions += [bp[0], bp[1], bp[2]]
+            if normals:
+                for pi in range(len(pts)):
+                    n = sample(normals, n_interp, 0, pi, 0)
+                    bn = self._point(n[0], n[1], n[2])
+                    out_norms += [bn[0], bn[1], bn[2]]
+            if st_vals:
+                for pi in range(len(pts)):
+                    uv = sample(st_vals, st_interp, 0, pi, 0)
+                    out_uvs += [uv[0], 1.0 - uv[1]]
+            o = 0
+            for c in counts:
+                for k in range(1, c - 1):
+                    indices += [idx[o], idx[o + k], idx[o + k + 1]]
+                o += c
+        else:
+            corner = 0
+            for face, c in enumerate(counts):
+                base = len(positions) // 3
+                for k in range(c):
+                    pi = idx[corner + k]
+                    p = pts[pi]
+                    bp = self._point(p[0], p[1], p[2])
+                    positions += [bp[0], bp[1], bp[2]]
+                    if normals:
+                        n = sample(normals, n_interp, corner + k, pi, face)
+                        bn = self._point(n[0], n[1], n[2])
+                        out_norms += [bn[0], bn[1], bn[2]]
+                    if st_vals:
+                        uv = sample(st_vals, st_interp, corner + k, pi, face)
+                        out_uvs += [uv[0], 1.0 - uv[1]]
+                for k in range(1, c - 1):
+                    indices += [base, base + k, base + k + 1]
+                corner += c
+
+        return positions, (out_norms or None), (out_uvs or None), indices
+
+    def _mesh_normals(self, prim, mesh):
+        """(values, interpolation) for authored normals, or (None, None)."""
+        vals = mesh.GetNormalsAttr().Get()
+        if vals:
+            interp = mesh.GetNormalsInterpolation() or UsdGeom.Tokens.vertex
+            return vals, interp
+        pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("normals")
+        if pv and pv.HasValue():
+            return pv.ComputeFlattened(), (pv.GetInterpolation() or UsdGeom.Tokens.vertex)
+        return None, None
+
+    def _mesh_uvs(self, prim):
+        """(values, interpolation) for the first UV set found, or (None, None)."""
+        pv_api = UsdGeom.PrimvarsAPI(prim)
+        for name in ("st", "st0", "UVMap", "uv", "map1"):
+            pv = pv_api.GetPrimvar(name)
+            if pv and pv.HasValue():
+                return pv.ComputeFlattened(), (pv.GetInterpolation() or UsdGeom.Tokens.faceVarying)
+        return None, None
+
+    # --- emitters --------------------------------------------------------
+    def _emit_mesh(self, enc, prim, upsert_node=True):
+        arrays = self._mesh_arrays(prim)
+        if arrays is None:
             return False
-
-        positions = []
-        for p in pts:
-            bp = self._point(p[0], p[1], p[2])
-            positions += [bp[0], bp[1], bp[2]]
-
-        # Fan-triangulate arbitrary polygons. Winding is irrelevant (double-sided).
-        indices = []
-        o = 0
-        for c in counts:
-            for k in range(1, c - 1):
-                indices += [idx[o], idx[o + k], idx[o + k + 1]]
-            o += c
+        positions, normals, uvs, indices = arrays
 
         node_id = self._id(prim.GetPath())
         if upsert_node:
             pos, quat, scale = self._node_trs(prim)
             enc.upsert_node(node_id, 0, blp.KIND_MESH, prim.GetName(), pos, quat, scale)
-        enc.upsert_mesh_geometry(node_id, positions, None, None, indices)
-
-        rgba = self._base_color(prim)
-        enc.upsert_material(node_id, rgba, 0.0, 0.6)
+        enc.upsert_mesh_geometry(node_id, positions, normals, uvs, indices)
+        self._emit_material(enc, node_id, prim, include_textures=True)
         return True
 
     def _base_color(self, prim):
@@ -134,6 +216,142 @@ class UsdBridge:
         except Exception:
             pass
         return (0.8, 0.8, 0.8, 1.0)
+
+    # --- materials (UsdPreviewSurface -> PBR) ----------------------------
+    def _emit_material(self, enc, node_id, prim, include_textures=True):
+        info = self._material_info(prim)
+        enc.upsert_material(node_id, info["rgba"], info["metallic"], info["roughness"],
+                            info["emissive"], info["emissive_strength"])
+        if include_textures:
+            for channel, data in info["textures"].items():
+                enc.upsert_material_texture(node_id, channel, data)
+
+    def _material_info(self, prim):
+        """Extract PBR from the bound UsdPreviewSurface, falling back to
+        displayColor. Returns a dict of scalars + a {channel: bytes} texture map
+        (base/metallic-roughness/normal/emissive/occlusion)."""
+        info = {
+            "rgba": (0.8, 0.8, 0.8, 1.0),
+            "metallic": 0.0,
+            "roughness": 0.6,
+            "emissive": (0.0, 0.0, 0.0),
+            "emissive_strength": 0.0,
+            "textures": {},
+        }
+        shader = self._bound_surface(prim)
+        if shader is None:
+            info["rgba"] = self._base_color(prim)
+            return info
+
+        diff = self._input_value(shader, "diffuseColor")
+        if _is_vec(diff):
+            opacity = self._input_value(shader, "opacity")
+            a = float(opacity) if isinstance(opacity, (int, float)) else 1.0
+            info["rgba"] = (diff[0], diff[1], diff[2], a)
+        metallic = self._input_value(shader, "metallic")
+        if isinstance(metallic, (int, float)):
+            info["metallic"] = float(metallic)
+        rough = self._input_value(shader, "roughness")
+        if isinstance(rough, (int, float)):
+            info["roughness"] = float(rough)
+        emis = self._input_value(shader, "emissiveColor")
+        if _is_vec(emis):
+            info["emissive"] = (emis[0], emis[1], emis[2])
+            if any(v > 1e-6 for v in info["emissive"]):
+                info["emissive_strength"] = 1.0
+
+        tex = info["textures"]
+        base = self._connected_texture(shader, "diffuseColor")
+        if base:
+            b = self._read_texture_bytes(base)
+            if b:
+                tex[blp.TEX_BASECOLOR] = b
+        nrm = self._connected_texture(shader, "normal")
+        if nrm:
+            b = self._read_texture_bytes(nrm)
+            if b:
+                tex[blp.TEX_NORMAL] = b
+        emt = self._connected_texture(shader, "emissiveColor")
+        if emt:
+            b = self._read_texture_bytes(emt)
+            if b:
+                tex[blp.TEX_EMISSIVE] = b
+                info["emissive_strength"] = max(info["emissive_strength"], 1.0)
+        occ = self._connected_texture(shader, "occlusion")
+        if occ:
+            b = self._read_texture_bytes(occ)
+            if b:
+                tex[blp.TEX_OCCLUSION] = b
+
+        # glTF ORM: metallic + roughness share one texture (metal=B, rough=G).
+        m_src = self._connected_texture(shader, "metallic")
+        r_src = self._connected_texture(shader, "roughness")
+        mr = r_src or m_src
+        if m_src and r_src and m_src.GetPath() != r_src.GetPath():
+            mr = r_src  # separate maps: prefer roughness carrier
+        if mr:
+            b = self._read_texture_bytes(mr)
+            if b:
+                tex[blp.TEX_METALROUGH] = b
+
+        return info
+
+    def _bound_surface(self, prim):
+        """The UsdPreviewSurface UsdShade.Shader bound to `prim`, or None."""
+        try:
+            bound = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()
+        except Exception:
+            return None
+        mat = bound[0] if isinstance(bound, (tuple, list)) else bound
+        if not mat:
+            return None
+        try:
+            surface = mat.ComputeSurfaceSource()
+        except Exception:
+            return None
+        shader = surface[0] if isinstance(surface, (tuple, list)) else surface
+        if not shader:
+            return None
+        return shader
+
+    @staticmethod
+    def _input_value(shader, name):
+        inp = shader.GetInput(name)
+        return inp.Get() if inp else None
+
+    def _connected_texture(self, shader, input_name):
+        """The connected UsdUVTexture shader prim feeding `input_name`, or None."""
+        inp = shader.GetInput(input_name)
+        if not inp:
+            return None
+        conns = inp.GetAttr().GetConnections()
+        if not conns:
+            return None
+        src_prim = self.stage.GetPrimAtPath(conns[0].GetPrimPath())
+        if not src_prim or not src_prim.IsValid():
+            return None
+        if UsdShade.Shader(src_prim).GetIdAttr().Get() != "UsdUVTexture":
+            return None
+        return src_prim
+
+    def _read_texture_bytes(self, tex_prim):
+        fin = UsdShade.Shader(tex_prim).GetInput("file")
+        asset = fin.Get() if fin else None
+        if not asset:
+            return None
+        path = getattr(asset, "resolvedPath", "") or getattr(asset, "path", "") or str(asset)
+        if not path:
+            return None
+        if not os.path.isabs(path):
+            base = os.path.dirname(self.stage.GetRootLayer().realPath or "")
+            cand = os.path.join(base, path)
+            if os.path.exists(cand):
+                path = cand
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except Exception:
+            return None
 
     def _emit_light(self, enc, prim):
         node_id = self._id(prim.GetPath())
@@ -278,7 +496,7 @@ class UsdBridge:
                     pos, quat, scale = self._raw_trs(prim)
                 else:
                     pos, quat, scale = self._node_trs(prim)
-                    enc.upsert_material(node_id, self._base_color(prim), 0.0, 0.6)
+                    self._emit_material(enc, node_id, prim, include_textures=False)
                 enc.set_transform(node_id, pos, quat, scale)
             elif prim.IsA(UsdLux.BoundableLightBase) or prim.IsA(UsdLux.NonboundableLightBase):
                 self._emit_light(enc, prim)

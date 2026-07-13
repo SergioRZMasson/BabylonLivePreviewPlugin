@@ -8,8 +8,9 @@ and a transform delta. Run:
 import os
 import struct
 import sys
+import tempfile
 
-from pxr import Usd, UsdGeom
+from pxr import Sdf, Usd, UsdGeom, UsdShade
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -55,11 +56,12 @@ def walk(buf):
             if hu:
                 off += vtx * 2 * 4
             off += idx * 4
-            rec.update(id=nid, vtx=vtx, idx=idx)
+            rec.update(id=nid, vtx=vtx, idx=idx, has_normals=bool(hn), has_uvs=bool(hu))
         elif ctype == blp.CMD_UPSERT_MATERIAL:
             (nid,) = struct.unpack_from("<Q", buf, off); off += 8
-            off += 48 - 8
-            rec["id"] = nid
+            vals = struct.unpack_from("<10f", buf, off); off += 40
+            rec.update(id=nid, rgba=vals[0:4], metallic=vals[4], roughness=vals[5],
+                       emissive=vals[6:9], emissive_strength=vals[9])
         elif ctype == blp.CMD_UPSERT_LIGHT:
             (nid, lt) = struct.unpack_from("<QH", buf, off); off += 10
             off += 28
@@ -70,10 +72,10 @@ def walk(buf):
             rec["mode"] = mode
         elif ctype == blp.CMD_UPSERT_MATERIAL_TEXTURE:
             (nid, ch) = struct.unpack_from("<QH", buf, off); off += 10
-            off += 1
+            (enc,) = struct.unpack_from("<B", buf, off); off += 1
             (blen,) = struct.unpack_from("<I", buf, off); off += 4
-            off += blen
-            rec.update(id=nid, channel=ch, len=blen)
+            data = bytes(buf[off:off + blen]); off += blen
+            rec.update(id=nid, channel=ch, len=blen, data=data)
         elif ctype == blp.CMD_BIND_NODE_PATH:
             (nid,) = struct.unpack_from("<Q", buf, off); off += 8
             (plen,) = struct.unpack_from("<H", buf, off); off += 2
@@ -122,6 +124,22 @@ def main():
     check(8 in geos and geos[8]["idx"] == 36, "cube geometry: 8 verts, 36 indices")
     check(4 in geos and geos[4]["idx"] == 6, "ground geometry: 4 verts, 6 indices")
 
+    # Cube binds a UsdPreviewSurface -> PBR scalars flow through; Ground uses the
+    # displayColor fallback.
+    mats = {r["id"]: r for r in snap[blp.CMD_UPSERT_MATERIAL]}
+    cube_mat = mats.get(cube_node["id"]) if cube_node else None
+    check(cube_mat is not None and abs(cube_mat["metallic"] - 0.9) < 1e-4,
+          "cube material metallic=0.9 (%s)" % (cube_mat["metallic"] if cube_mat else None))
+    check(cube_mat is not None and abs(cube_mat["roughness"] - 0.15) < 1e-4,
+          "cube material roughness=0.15 (%s)" % (cube_mat["roughness"] if cube_mat else None))
+    check(cube_mat is not None and abs(cube_mat["rgba"][0] - 0.90) < 1e-4
+          and abs(cube_mat["rgba"][1] - 0.35) < 1e-4,
+          "cube diffuseColor -> base rgba (%s)" % (str(cube_mat["rgba"]) if cube_mat else None))
+    check(cube_mat is not None and cube_mat["emissive_strength"] > 0.0
+          and cube_mat["emissive"][0] > 0.0,
+          "cube emissiveColor emitted with strength (%s)"
+          % (str(cube_mat["emissive"]) if cube_mat else None))
+
     # --- baked snapshot: bind pre-loaded glTF nodes by path, no geometry, no reset ---
     baked = walk(bridge.build_snapshot_baked())
     print("[usdtest] baked snapshot commands:", {k: len(v) for k, v in baked.items()})
@@ -155,11 +173,89 @@ def main():
         check(bst and abs(bst[0]["pos"][0] - 2.0) < 1e-4 and abs(bst[0]["pos"][2] - 3.0) < 1e-4,
               "baked SetTransform keeps USD space (2,1,3): %s" % (str(bst[0]["pos"]) if bst else None))
 
+    check_normals_uvs_textures(check)
+
     if failures == 0:
         print("[usdtest] ALL PASS")
         return 0
     print("[usdtest] %d FAILURE(S)" % failures)
     return 1
+
+
+def check_normals_uvs_textures(check):
+    """In-memory stage exercising authored normals + UVs (faceVarying) and a
+    fully-textured UsdPreviewSurface (base/normal/emissive + combined ORM)."""
+    tmp = tempfile.mkdtemp(prefix="blp_usdtex_")
+    base_png = _write(os.path.join(tmp, "base.png"), b"\x89PNG-base-color")
+    orm_png = _write(os.path.join(tmp, "orm.png"), b"\x89PNG-metal-rough")
+    nrm_png = _write(os.path.join(tmp, "nrm.png"), b"\x89PNG-normal-map")
+    emi_png = _write(os.path.join(tmp, "emi.png"), b"\x89PNG-emissive")
+
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
+
+    mesh = UsdGeom.Mesh.Define(stage, "/World/Quad")
+    mesh.CreatePointsAttr([(-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1)])
+    mesh.CreateFaceVertexCountsAttr([4])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+    mesh.CreateNormalsAttr([(0, 1, 0)] * 4)
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
+    st = UsdGeom.PrimvarsAPI(mesh.GetPrim()).CreatePrimvar(
+        "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying)
+    st.Set([(0, 0), (1, 0), (1, 1), (0, 1)])
+
+    surf = UsdShade.Shader.Define(stage, "/World/Looks/M/Surface")
+    surf.CreateIdAttr("UsdPreviewSurface")
+    surf.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((1, 1, 1))
+    surf.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(1.0)
+    surf.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
+    surf.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set((1, 1, 1))
+    surf.CreateInput("normal", Sdf.ValueTypeNames.Normal3f)
+    surf_out = surf.CreateOutput("surface", Sdf.ValueTypeNames.Token)
+
+    def texture(path, name, out_names):
+        tex = UsdShade.Shader.Define(stage, "/World/Looks/M/" + name)
+        tex.CreateIdAttr("UsdUVTexture")
+        tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(path)
+        return {n: tex.CreateOutput(n, Sdf.ValueTypeNames.Float3) for n in out_names}
+
+    base = texture(base_png, "BaseTex", ["rgb"])
+    orm = texture(orm_png, "OrmTex", ["g", "b"])
+    nrm = texture(nrm_png, "NrmTex", ["rgb"])
+    emi = texture(emi_png, "EmiTex", ["rgb"])
+    surf.GetInput("diffuseColor").ConnectToSource(base["rgb"])
+    surf.GetInput("metallic").ConnectToSource(orm["b"])
+    surf.GetInput("roughness").ConnectToSource(orm["g"])
+    surf.GetInput("normal").ConnectToSource(nrm["rgb"])
+    surf.GetInput("emissiveColor").ConnectToSource(emi["rgb"])
+
+    mat = UsdShade.Material.Define(stage, "/World/Looks/M")
+    mat.CreateSurfaceOutput().ConnectToSource(surf_out)
+    UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
+
+    snap = walk(bridgemod.UsdBridge(stage).build_snapshot())
+    geo = snap.get(blp.CMD_UPSERT_MESH_GEOMETRY, [])
+    check(len(geo) == 1 and geo[0]["has_normals"] and geo[0]["has_uvs"],
+          "quad geometry carries authored normals + UVs")
+    check(geo and geo[0]["vtx"] == 4 and geo[0]["idx"] == 6,
+          "faceVarying quad expanded to 4 corner verts, 6 indices (%s)"
+          % (str((geo[0]["vtx"], geo[0]["idx"])) if geo else None))
+
+    texs = {r["channel"]: r for r in snap.get(blp.CMD_UPSERT_MATERIAL_TEXTURE, [])}
+    check(blp.TEX_BASECOLOR in texs and texs[blp.TEX_BASECOLOR]["data"] == b"\x89PNG-base-color",
+          "base-color texture bytes streamed")
+    check(blp.TEX_METALROUGH in texs and texs[blp.TEX_METALROUGH]["data"] == b"\x89PNG-metal-rough",
+          "combined metallic-roughness texture (shared file) streamed")
+    check(blp.TEX_NORMAL in texs and texs[blp.TEX_NORMAL]["data"] == b"\x89PNG-normal-map",
+          "normal texture bytes streamed")
+    check(blp.TEX_EMISSIVE in texs and texs[blp.TEX_EMISSIVE]["data"] == b"\x89PNG-emissive",
+          "emissive texture bytes streamed")
+
+
+def _write(path, data):
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
 
 
 if __name__ == "__main__":
