@@ -210,14 +210,10 @@ def _node_trs(obj):
             (scale.x, scale.y, scale.z))
 
 
-def _world_clear(scene):
-    try:
-        if scene.world is not None and scene.world.color is not None:
-            c = scene.world.color
-            return (c[0], c[1], c[2], 1.0)
-    except Exception:
-        pass
-    return (0.05, 0.06, 0.09, 1.0)
+# The classic Babylon.js default clear color (a dark purple-blue). Used as the
+# viewport background so the scene clearly reads as a Babylon render rather than
+# mirroring Blender's world color.
+BABYLON_CLEAR_COLOR = (0.2, 0.2, 0.3, 1.0)
 
 
 def _emit_geometry(enc, obj, node_id, depsgraph):
@@ -547,7 +543,7 @@ class SceneSync:
 
         enc = CommandEncoder()
         enc.reset_scene()
-        enc.set_clear_color(_world_clear(context.scene))
+        enc.set_clear_color(BABYLON_CLEAR_COLOR)
         # Add a dim hemispheric fill ONLY when the scene has no lights, so the
         # actual scene lights drive the look (and light edits are visible).
         if not any(o.type == 'LIGHT' for o in context.scene.objects):

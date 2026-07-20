@@ -63,7 +63,8 @@ export class NativeHost {
     private createDefaultScene(): BJS.Scene {
         const B = getGlobalBabylon();
         const scene = new B.Scene(this.engine);
-        scene.clearColor = new B.Color4(0.15, 0.17, 0.22, 1.0);
+        // Classic Babylon.js clear color (dark purple-blue) — marks this as a Babylon scene.
+        scene.clearColor = new B.Color4(0.2, 0.2, 0.3, 1.0);
 
         const camera = new B.ArcRotateCamera(
             "camera", -Math.PI / 3, Math.PI / 3, 8, B.Vector3.Zero(), scene);

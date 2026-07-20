@@ -169,26 +169,41 @@ Dependencies/           Babylon Native (git submodule)
 
 ## Prerequisites
 
-- Windows 10/11, x64 · Visual Studio 2022 (Desktop C++) · CMake ≥ 3.21
+- **Windows** 10/11, x64 · Visual Studio 2022 (Desktop C++) · CMake ≥ 3.21
+- **macOS** (Apple Silicon) · Xcode + command‑line tools · Ninja · CMake ≥ 3.21
 - Node.js + npm (used both for Babylon scripts and to build the TS bundles)
 - Git · Python with `pxr` + `websockets` (only for the USD bridge)
 
 ## Build
 
-```powershell
+```bash
 git clone --recursive <repo-url>
 cd BabylonLivePreviewPlugin
 git submodule update --init --recursive   # if not cloned with --recursive
 
 # 1. Babylon scripts + TS toolchain (esbuild, typescript)
 npm install
+```
 
-# 2. Configure (first run downloads Babylon Native deps — slow)
+**Windows** (D3D11 · V8):
+
+```powershell
 cmake --preset windows-x64-release
-
-# 3. Build the C++ core, the Blender DLL, and the headless tests
 cmake --build --preset windows-x64-release
 ```
+
+**macOS** (Apple Silicon · Metal · JavaScriptCore):
+
+```bash
+cmake --preset macos-arm64
+cmake --build --preset macos-arm64 --target BabylonLivePreviewBlender
+```
+
+The core adapts to each host automatically: the JS engine is V8 on Windows and
+JavaScriptCore on macOS (via `NAPI_JAVASCRIPT_ENGINE`), and the offscreen render
+surface is a hidden‑window D3D11 swapchain on Windows and an off‑screen
+`CAMetalLayer` on macOS. The macOS Blender build also emits an installable add‑on
+zip (`build/macos-arm64/babylon_live_preview-darwin-arm64.zip`).
 
 Each DCC plugin generates its own `live_preview.js` from `Clients/ts` at build
 time (via `blp_build_live_script`), so Node must be installed and `npm install`
@@ -196,7 +211,7 @@ must have run.
 
 | CMake option | Default | Description |
 |---|---|---|
-| `BLP_BUILD_BLENDER` | ON | Build the Blender C‑API DLL |
+| `BLP_BUILD_BLENDER` | ON | Build the Blender C‑API native module (.dll/.dylib) |
 | `BLP_BUILD_MAYA` | OFF | Build the Maya plugin (auto‑detects a Maya install, or set `MAYA_SDK_ROOT`) |
 | `BLP_BUILD_MAX` | OFF | Build the 3ds Max plugin (needs `MAX_SDK_ROOT`) |
 | `BLP_BUILD_TESTS` | ON | Build the headless C++ tests |
@@ -210,7 +225,7 @@ README — [Blender](Plugins/Blender/README.md) · [Maya](Plugins/Maya/README.md
 
 **Browser (WebSocket):** stream a mock scene into a Babylon page —
 
-```powershell
+```bash
 node Clients/ts/build.mjs --web             # build the browser bundles
 node Plugins/Omniverse/web/server.mjs       # http + ws on http://localhost:8080
 #   open http://localhost:8080

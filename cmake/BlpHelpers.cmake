@@ -96,3 +96,52 @@ function(blp_build_live_script target dcc)
         COMMENT "Building ${dcc} live_preview.js from Clients/ts (TypeScript)"
         VERBATIM)
 endfunction()
+
+# ---------------------------------------------------------------------------
+# blp_package_blender_addon(target)
+#
+# Assembles an installable Blender add-on from the Python package in
+# Plugins/Blender/addon/babylon_live_preview plus the freshly built native
+# module and its staged Scripts/ folder, then zips it. The add-on's
+# _default_dll_path() looks for the native module in "<package>/bin/", so the
+# layout produced here is:
+#
+#   <package>/                 (the four .py files)
+#   <package>/bin/<module>     (libbabylon_live_preview.dylib / .dll / .so)
+#   <package>/bin/Scripts/     (babylon.js, live_preview.js, environment.env, ...)
+#
+# Output: ${CMAKE_BINARY_DIR}/babylon_live_preview-<platform>.zip
+# ---------------------------------------------------------------------------
+function(blp_package_blender_addon target)
+    set(_addon_src "${CMAKE_CURRENT_SOURCE_DIR}/addon/babylon_live_preview")
+    set(_stage "${CMAKE_BINARY_DIR}/blender-addon")
+    set(_pkg "${_stage}/babylon_live_preview")
+
+    # Ensure the staging root exists now so the POST_BUILD WORKING_DIRECTORY (the
+    # `cd` into it) succeeds on the very first build.
+    file(MAKE_DIRECTORY "${_stage}")
+
+    string(TOLOWER "${CMAKE_SYSTEM_NAME}" _plat)
+    if(CMAKE_OSX_ARCHITECTURES)
+        set(_arch "${CMAKE_OSX_ARCHITECTURES}")
+    else()
+        set(_arch "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    set(_zip "${CMAKE_BINARY_DIR}/babylon_live_preview-${_plat}-${_arch}.zip")
+
+    add_custom_command(TARGET ${target} POST_BUILD
+        # Fresh staging tree.
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_pkg}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_pkg}/bin"
+        # Python package (copy the dir, then drop any __pycache__).
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${_addon_src}" "${_pkg}"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_pkg}/__pycache__"
+        # Native module + its staged Scripts next to it.
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${target}>" "${_pkg}/bin/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:${target}>/Scripts" "${_pkg}/bin/Scripts"
+        # Zip it (archive paths relative to the staging root → top-level babylon_live_preview/).
+        COMMAND ${CMAKE_COMMAND} -E tar cf "${_zip}" --format=zip babylon_live_preview
+        WORKING_DIRECTORY "${_stage}"
+        COMMENT "Packaging Blender add-on -> ${_zip}"
+        VERBATIM)
+endfunction()

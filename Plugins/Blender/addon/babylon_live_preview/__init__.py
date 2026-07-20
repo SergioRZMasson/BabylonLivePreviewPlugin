@@ -29,16 +29,20 @@ from . import viewport
 
 
 def _default_dll_path():
-    # The build copies the DLL next to this add-on when packaged; also allow a
-    # sibling "bin" folder and the in-repo dev build output during development.
+    # Cross-platform: the native module is babylon_live_preview.dll (Windows),
+    # libbabylon_live_preview.dylib (macOS) or libbabylon_live_preview.so (Linux).
+    # The packaged add-on ships it under bin/; also allow a sibling file and the
+    # in-repo dev build output during development.
+    name = bridge.library_filename()
     here = os.path.dirname(__file__)
     repo = os.path.normpath(os.path.join(here, "..", "..", "..", ".."))
-    for candidate in (
-        os.path.join(here, "babylon_live_preview.dll"),
-        os.path.join(here, "bin", "babylon_live_preview.dll"),
-        os.path.join(repo, "build", "Plugins", "Blender", "Release", "babylon_live_preview.dll"),
-    ):
-        if os.path.isfile(candidate):
+    candidates = [
+        os.path.join(here, name),
+        os.path.join(here, "bin", name),
+        bridge.default_build_library(repo),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
             return candidate
     return ""
 
@@ -47,10 +51,11 @@ class BLP_AddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
     dll_path: bpy.props.StringProperty(
-        name="Core DLL",
+        name="Core Module",
         subtype='FILE_PATH',
         default=_default_dll_path(),
-        description="Path to babylon_live_preview.dll",
+        description="Path to the Babylon Live Preview native module "
+                    "(babylon_live_preview.dll / .dylib / .so)",
     )
     render_width: bpy.props.IntProperty(name="Width", default=1280, min=64, max=8192)
     render_height: bpy.props.IntProperty(name="Height", default=720, min=64, max=8192)

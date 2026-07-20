@@ -5,7 +5,7 @@ the result back into the 3D viewport, updating as you edit. Target:
 **Blender 4.2 LTS (Python 3.11)**.
 
 This is the **in‑process C++ bind layer** in action: a Python add‑on drives a
-native DLL (`babylon_live_preview.dll`) that embeds Babylon Native. The add‑on
+native module (`babylon_live_preview.dll` on Windows, `libbabylon_live_preview.dylib` on macOS) that embeds Babylon Native. The add‑on
 translates the Blender scene to protocol buffers and submits them straight into
 the embedded JS decoder — no network.
 
@@ -56,9 +56,12 @@ src/ + exports.def            the C‑API DLL target (built by CMake)
 tests/                        standalone + in‑Blender headless tests
 ```
 
-## Build the core DLL
+## Build the native module
 
-From the repo root (see the [top‑level README](../../README.md)):
+From the repo root (see the [top‑level README](../../README.md)). `npm install`
+once first (it provides the Babylon.js scripts bundled next to the module).
+
+**Windows** (Visual Studio, D3D11, V8):
 
 ```powershell
 npm install
@@ -66,37 +69,62 @@ cmake --preset windows-x64-release
 cmake --build --preset windows-x64-release --target BabylonLivePreviewBlender
 ```
 
-Produces `build/Plugins/Blender/Release/babylon_live_preview.dll` together with
-its `Scripts/` folder (including a `live_preview.js` built from `Clients/ts`) and
-the Babylon Native / V8 runtime DLLs.
+Produces `build/Plugins/Blender/Release/babylon_live_preview.dll` + its
+`Scripts/` folder + the Babylon Native / V8 runtime DLLs.
 
-> **Build requirement:** the DLL is compiled with
-> `_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR` (set at the repo root). Blender bundles an
-> older `msvcp140.dll`, and the VS 2022 17.10+ constexpr `std::mutex` crashes on
-> first lock against it. The CMake build already applies this.
+**macOS** (Apple Silicon, Metal, JavaScriptCore):
+
+```bash
+npm install
+cmake --preset macos-arm64
+cmake --build --preset macos-arm64 --target BabylonLivePreviewBlender
+```
+
+Produces `build/macos-arm64/Plugins/Blender/libbabylon_live_preview.dylib` + its
+`Scripts/` folder. The `.dylib` is **self‑contained** — Babylon Native and
+JavaScriptCore are linked statically / as a system framework, so there are no
+sibling runtime libraries to ship.
+
+Either build also emits a ready‑to‑install add‑on zip at
+`build/<preset>/babylon_live_preview-<platform>-<arch>.zip` (see *Install & run*).
+
+> **macOS notes:** the JS engine is JavaScriptCore (V8 is Windows‑only here), the
+> renderer is Metal, and the headless render surface is an off‑screen
+> `CAMetalLayer` (`framebufferOnly = NO` so the frame can be read back) — the
+> analogue of the hidden window used for D3D11 readback on Windows.
+
+> **Windows note:** the DLL is compiled with `_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR`
+> (set at the repo root). Blender bundles an older `msvcp140.dll`, and the VS 2022
+> 17.10+ constexpr `std::mutex` crashes on first lock against it. The CMake build
+> already applies this. (Not applicable to the macOS/clang build.)
 
 ## Install &amp; run
 
-1. Copy `build/Plugins/Blender/Release/` (the DLL + `Scripts/` + runtime DLLs)
-   into `addon/babylon_live_preview/bin/`, then zip the `babylon_live_preview`
-   folder — or point Blender's scripts path at it.
-2. Blender ▸ **Edit ▸ Preferences ▸ Add‑ons ▸ Install…**, enable **Babylon Live
-   Preview**. In the add‑on preferences, set **Core DLL** to your built
-   `babylon_live_preview.dll` (the in‑repo dev path is auto‑detected).
+1. Install the packaged add‑on zip produced by the build
+   (`build/<preset>/babylon_live_preview-<platform>-<arch>.zip`). It already
+   contains the Python package plus `bin/<native module>` and `bin/Scripts/`.
+   (For dev iteration you can instead point Blender's scripts path at
+   `Plugins/Blender/addon/` — the add‑on auto‑detects the in‑repo build output.)
+2. Blender ▸ **Edit ▸ Preferences ▸ Add‑ons**, use the **⌄ menu ▸ Install from
+   Disk…** (Blender 4.2+/5.x) to pick the zip, then enable **Babylon Live
+   Preview**. The **Core Module** preference auto‑detects the native module
+   (`babylon_live_preview.dll` / `libbabylon_live_preview.dylib`) from the add‑on's
+   `bin/` folder or the in‑repo build; only set it manually if you moved it.
 3. In the 3D viewport: **Sidebar (N) ▸ Babylon ▸ Toggle Live Preview**.
 
 The timer pump renders Babylon, pushes a snapshot on start, and paints the
 readback frame in the viewport; edits stream incrementally. Toggle again to stop.
 
-> **Note:** an enabled add‑on auto‑loads from
-> `%APPDATA%\Blender Foundation\Blender\4.2\scripts\addons\babylon_live_preview\`.
+> **Note:** an enabled add‑on auto‑loads from Blender's user add‑ons folder —
+> Windows `%APPDATA%\Blender Foundation\Blender\4.2\scripts\addons\babylon_live_preview\`,
+> macOS `~/Library/Application Support/Blender/4.2/scripts/addons/babylon_live_preview/`.
 > When iterating on a build, overwrite that installed copy, delete its
 > `__pycache__`, and restart Blender to pick up changes.
 
 ## Verify (headless, no GUI)
 
-```powershell
-# standalone: DLL + protocol path (no Blender)
+```bash
+# standalone: native module + protocol path (no Blender), cross-platform
 python Plugins/Blender/tests/run_bridge.py
 
 # inside Blender (background): capture + render the default scene, and incremental
@@ -108,7 +136,9 @@ blender --background --python Plugins/Blender/tests/run_texture_blender.py
 blender --background --python Plugins/Blender/tests/run_texture_channels.py
 ```
 
-Babylon Native creates its own D3D11 device, so these all work in background mode.
+Babylon Native renders to its own off‑screen surface (a hidden‑window D3D11
+swapchain on Windows, an off‑screen `CAMetalLayer` on macOS), so these all work
+in background mode.
 The on‑screen `gpu` draw (`viewport.py`) is the only part that needs an
 interactive Blender to eyeball; the data path it displays is covered by the
 headless tests.

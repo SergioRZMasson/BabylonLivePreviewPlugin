@@ -43,6 +43,14 @@ if(WIN32)
     target_link_libraries(BabylonLivePreviewCore PUBLIC d3d11 dxgi)
 endif()
 
+if(APPLE)
+    # macOS render surface + Metal device creation for the headless readback path
+    # (Platform_macOS.mm). Compiled as Objective-C++ (manual retain/release — no ARC).
+    target_sources(BabylonLivePreviewCore PRIVATE src/Platform_macOS.mm)
+    target_link_libraries(BabylonLivePreviewCore PUBLIC
+        "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+endif()
+
 set_property(TARGET BabylonLivePreviewCore PROPERTY FOLDER "BabylonLivePreview")
 
 # Assemble the JS bundle (babylon.max.js + live_preview.js) in the build tree.

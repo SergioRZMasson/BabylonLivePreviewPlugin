@@ -1,0 +1,11 @@
+# Exported symbols for the macOS Blender module (the .dylib analogue of
+# exports.def). ld64 -exported_symbols_list; macOS C symbols carry a leading _.
+_blp_create
+_blp_destroy
+_blp_resize
+_blp_render_frame
+_blp_is_ready
+_blp_submit_commands
+_blp_eval
+_blp_request_readback
+_blp_try_acquire_readback

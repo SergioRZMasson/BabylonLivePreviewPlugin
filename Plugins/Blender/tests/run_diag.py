@@ -20,7 +20,9 @@ import bridge   # noqa: E402
 
 
 def default_dll():
-    return os.path.join(_REPO, "build", "Plugins", "Blender", "Release", "babylon_live_preview.dll")
+    # Cross-platform: resolve the built native module (.dll/.dylib/.so) across
+    # multi-config (Windows) and single-config (macOS/Linux) build trees.
+    return bridge.default_build_library(_REPO)
 
 
 def main():

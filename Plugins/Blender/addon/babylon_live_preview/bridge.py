@@ -7,6 +7,48 @@ it can be unit-tested standalone.
 
 import ctypes
 import os
+import sys
+
+
+def library_filename():
+    """Platform-specific filename of the built Babylon Live Preview native module."""
+    if sys.platform == "darwin":
+        return "libbabylon_live_preview.dylib"
+    if sys.platform == "win32":
+        return "babylon_live_preview.dll"
+    return "libbabylon_live_preview.so"
+
+
+def default_build_library(repo_root):
+    """Best-effort path to the in-repo built native module (dev convenience).
+
+    Handles multi-config (Windows: Release/Debug subfolders) and single-config
+    (macOS/Linux) generators, plus custom build dirs like build/macos-arm64/.
+    """
+    import glob
+
+    name = library_filename()
+    blender = ("Plugins", "Blender")
+    # Cover the direct build dir and nested preset dirs (e.g. build/macos-arm64),
+    # with and without a per-config subfolder (Release/Debug on multi-config gens).
+    patterns = [
+        os.path.join(repo_root, "build", *blender, name),
+        os.path.join(repo_root, "build", *blender, "*", name),
+        os.path.join(repo_root, "build*", *blender, name),
+        os.path.join(repo_root, "build*", *blender, "*", name),
+        os.path.join(repo_root, "build", "*", *blender, name),
+        os.path.join(repo_root, "build", "*", *blender, "*", name),
+        os.path.join(repo_root, "build*", "*", *blender, name),
+        os.path.join(repo_root, "build*", "*", *blender, "*", name),
+    ]
+    hits = []
+    for pattern in patterns:
+        hits.extend(h for h in glob.glob(pattern) if os.path.isfile(h))
+    if hits:
+        # Prefer the most recently built module.
+        return max(set(hits), key=os.path.getmtime)
+    # Canonical Release path even if missing, so error messages are informative.
+    return os.path.join(repo_root, "build", *blender, "Release", name)
 
 
 class BlpConfig(ctypes.Structure):
@@ -29,8 +71,10 @@ class BabylonBridge:
 
     def __init__(self, dll_path):
         if not os.path.isfile(dll_path):
-            raise FileNotFoundError("babylon_live_preview DLL not found: %s" % dll_path)
-        # Ensure dependent DLLs (V8, Babylon Native) next to the module resolve.
+            raise FileNotFoundError("Babylon Live Preview native module not found: %s" % dll_path)
+        # On Windows, ensure dependent DLLs (V8, Babylon Native) next to the
+        # module resolve. On macOS/Linux the module is self-contained (Babylon
+        # Native is linked statically), so this is a Windows-only no-op elsewhere.
         dll_dir = os.path.dirname(dll_path)
         if hasattr(os, "add_dll_directory") and os.path.isdir(dll_dir):
             self._dll_dir_handle = os.add_dll_directory(dll_dir)

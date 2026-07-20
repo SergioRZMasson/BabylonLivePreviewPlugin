@@ -30,6 +30,13 @@
 #include <Windows.h>
 #endif
 
+#if defined(__APPLE__)
+// Implemented in Platform_macOS.mm — creates/destroys the off-screen
+// CAMetalLayer that backs the readable Metal swapchain.
+extern "C" void* BlpCreateOffscreenMetalLayer(uint32_t width, uint32_t height);
+extern "C" void BlpReleaseMetalLayer(void* layer);
+#endif
+
 namespace BabylonLivePreview
 {
     namespace
@@ -76,6 +83,10 @@ namespace BabylonLivePreview
 
 #ifdef _WIN32
         HWND hwnd{};
+#endif
+
+#ifdef __APPLE__
+        void* metalLayer{}; // CAMetalLayer* — off-screen Metal render surface
 #endif
 
         std::unique_ptr<Babylon::AppRuntime> runtime{};
@@ -140,8 +151,19 @@ namespace BabylonLivePreview
                 std::fflush(stderr);
             }
         }
+#elif defined(__APPLE__)
+        if (windowHandle == nullptr)
+        {
+            m_impl->metalLayer = BlpCreateOffscreenMetalLayer(config.width, config.height);
+            windowHandle = m_impl->metalLayer;
+            if (verbose)
+            {
+                std::fprintf(stderr, "[BLP-INIT] offscreen CAMetalLayer=%p\n", windowHandle);
+                std::fflush(stderr);
+            }
+        }
 #endif
-        chk("hidden window created");
+        chk("render surface created");
 
         Babylon::Graphics::Configuration graphicsConfig{};
         graphicsConfig.Window = reinterpret_cast<Babylon::Graphics::WindowT>(windowHandle);
@@ -282,6 +304,13 @@ namespace BabylonLivePreview
         {
             ::DestroyWindow(impl->hwnd);
             impl->hwnd = nullptr;
+        }
+#endif
+#ifdef __APPLE__
+        if (impl->metalLayer)
+        {
+            BlpReleaseMetalLayer(impl->metalLayer);
+            impl->metalLayer = nullptr;
         }
 #endif
     }
